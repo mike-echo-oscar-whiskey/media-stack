@@ -1,0 +1,21 @@
+# Intel / AMD hardware transcoding for Plex and Jellyfin via VA-API.
+# Activate by setting in .env:
+#   COMPOSE_FILE=compose.yml:compose.hwaccel.amd.yml
+# Plex needs Plex Pass; then enable "Use hardware acceleration when available"
+# under Settings > Transcoder. Jellyfin needs nothing extra: configure.sh sets
+# its transcoder to VA-API on /dev/dri/renderD128.
+services:
+  plex:
+    devices:
+      - /dev/dri:/dev/dri
+    # The container user must be in the groups that own /dev/dri/renderD128
+    # and /dev/dri/card*. Values come from .env (getent group render video).
+    group_add:
+      - "${RENDER_GID}"
+      - "${VIDEO_GID}"
+  jellyfin:
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID}"
+      - "${VIDEO_GID}"

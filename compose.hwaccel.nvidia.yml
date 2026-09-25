@@ -1,0 +1,32 @@
+# NVIDIA hardware transcoding for Plex and Jellyfin via the NVIDIA Container Toolkit.
+# Host prerequisites (Arch): the proprietary driver and
+#   yay -S nvidia-container-toolkit
+#   sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+# Activate by setting in .env:
+#   COMPOSE_FILE=compose.yml:compose.hwaccel.nvidia.yml
+# Plex needs Plex Pass; Jellyfin needs nothing extra (configure.sh sets its
+# transcoder to VA-API only when a /dev/dri render node is visible, so on NVIDIA
+# pick NVENC under Dashboard > Playback > Transcoding once).
+services:
+  plex:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  jellyfin:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

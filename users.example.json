@@ -1,0 +1,32 @@
+[
+  {
+    "_comment": [
+      "Family accounts for Plex and Jellyfin, managed by ./configure.sh. Copy to users.json (gitignored: it names",
+      "your family) and edit. One object per user; this first object is documentation and is ignored.",
+      "name       the Jellyfin user name (created when missing, without a password)",
+      "role       admin | adult | child. admin: every right. adult: every library, but may not",
+      "           delete media or control other people's players. child: as adult, plus a parental",
+      "           rating, unrated items blocked, no SyncPlay, and no music library.",
+      "rating     highest content rating a child may watch, on the scale of the metadata",
+      "           country: with PLEX_CERTIFICATION_COUNTRY=NL that is Kijkwijzer, so 0 (AL),",
+      "           6, 9, 12, 14, 16, 18. It is a rating, not an age: a five-year-old is 0.",
+      "           Ratings from other systems are mapped onto it (PG-13 is 13, R is 17), and",
+      "           an unrated item is blocked for a child whatever the number says.",
+      "channels   may open plugin channels, when a plugin that publishes any is installed (default false)",
+      "hidden     not shown on the login screen                       (default false)",
+      "nopass     signs in without a password; one set in the UI is removed again (default false;",
+      "           not possible for an admin, Jellyfin refuses it)",
+      "rich       backdrops, theme media, details banner, next-episode overlay, episode stills,",
+      "           Collections view, set on every run                   (default false)",
+      "audio      preferred audio language, ISO 639-2 (nld, eng): that track plays when present",
+      "subtitles  preferred subtitle language; when set, subtitles are always shown",
+      "Rights and preferences are re-applied on every run, so edit them here, not in the UI.",
+      "Users that exist in Jellyfin but not here are left alone, never deleted."
+    ]
+  },
+  { "name": "Parent",     "role": "admin",                 "rich": true },
+  { "name": "Partner",    "role": "adult",                 "channels": true, "nopass": true, "rich": true },
+  { "name": "Teen",       "role": "adult",                 "channels": true, "nopass": true, "rich": true, "audio": "eng", "subtitles": "nld" },
+  { "name": "Kid",        "role": "child", "rating": 12,   "nopass": true, "rich": true, "audio": "nld" },
+  { "name": "Little kid", "role": "child", "rating": 9,    "nopass": true, "rich": true, "audio": "nld" }
+]
