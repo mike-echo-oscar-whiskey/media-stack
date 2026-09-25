@@ -1,0 +1,7 @@
+# Gluetun control-server roles. The server listens on :8000 inside Gluetun's
+# network namespace only (never published), so these two read-only routes are
+# open there for configure.sh's VPN check. Everything else stays private.
+[[roles]]
+name = "status"
+routes = ["GET /v1/publicip/ip", "GET /v1/portforward"]
+auth = "none"

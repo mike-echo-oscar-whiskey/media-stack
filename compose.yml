@@ -1,0 +1,525 @@
+# Media automation stack. All values come from .env - see .env.example.
+#
+# For educational purposes only - see the disclaimer in README.md. Use it only
+# with content, indexers and services you are entitled to access.
+#
+# Every service that touches media mounts the SAME host directory at /data so
+# that download clients and Sonarr/Radarr see identical paths and imports can
+# be hardlinks instead of copies. Never split /data into /downloads + /media.
+#
+# Opt-in overrides via COMPOSE_FILE in .env: Plex hardware transcoding
+# (compose.hwaccel.amd.yml / compose.hwaccel.nvidia.yml). The VPN is not one of
+# them - Gluetun is declared below and qBittorrent, Prowlarr and FlareSolverr
+# run in its namespace, so there is no arrangement without it.
+#
+# Web UI ports bind to APP_BIND (127.0.0.1 by default): a reverse proxy on the
+# host gives each app a hostname on :80 - see caddy/Caddyfile.example and
+# README "URLs, hostnames and ports".
+
+# The project name, and with it the container and network names, would
+# otherwise be whatever this directory happens to be called - so a clone into
+# another folder would build media-stack_media under a different name and every
+# troubleshooting command in the README would be wrong. Pinned here instead.
+name: media-stack
+
+# Shared by every LinuxServer.io service.
+# Seerr and FlareSolverr are not LSIO images and set their own.
+x-lsio: &lsio
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  environment: &lsio-env
+    PUID: ${PUID}
+    PGID: ${PGID}
+    TZ: ${TZ}
+    UMASK: ${UMASK}
+
+networks:
+  media:
+
+services:
+  # ---------------------------------------------------------------- dashboard
+  # Failure alerts. Self-hosted so the stream of what fails, and when, stays on
+  # this network instead of a third party's. The port binds to APP_BIND, so only
+  # the reverse proxy and the LAN reach it, and everything that reads or writes
+  # authenticates - see NTFY_AUTH_DEFAULT_ACCESS below.
+  ntfy:
+    image: binwiederhier/ntfy:${NTFY_TAG}
+    container_name: ntfy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: serve
+    environment:
+      TZ: ${TZ}
+      NTFY_BASE_URL: http://ntfy.${SITE_DOMAIN}
+      NTFY_LISTEN_HTTP: ":80"
+      NTFY_BEHIND_PROXY: "true"
+      # Messages are kept, so a phone that was off the network gets what it
+      # missed when it comes back - late rather than never.
+      NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
+      NTFY_CACHE_DURATION: 72h
+      # Nobody reads or writes without an account. Without this the topic name
+      # is the only protection, which forces it to be an unguessable string;
+      # with it the topic can be named for what it is.
+      NTFY_AUTH_FILE: /var/lib/ntfy/user.db
+      NTFY_AUTH_DEFAULT_ACCESS: deny-all
+    volumes:
+      - ${CONFIG_ROOT}/ntfy:/var/lib/ntfy
+    ports:
+      - "${APP_BIND}:8090:80"
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/v1/health | grep -q '\"healthy\":true'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  homepage:
+    image: ghcr.io/gethomepage/homepage:${HOMEPAGE_TAG}
+    container_name: homepage
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+      # Host headers Homepage accepts (DNS-rebinding protection): the dashboard
+      # name via the reverse proxy, the bare LAN IP, and the health check.
+      HOMEPAGE_ALLOWED_HOSTS: "media.${SITE_DOMAIN},${LAN_IP},localhost:3000"
+    volumes:
+      # services.yaml etc. are written by configure.sh (they hold API keys).
+      - ${CONFIG_ROOT}/homepage:/app/config
+      # Read-only, only so the disk-usage tile can report /data.
+      - ${DATA_ROOT}:/data:ro
+      # Headlines written by news.sh, served by Homepage itself as static
+      # files (a tile reads http://localhost:3000/news/<slug>.json, one per feed).
+      - ${CONFIG_ROOT}/homepage/news:/app/public/news:ro
+    ports:
+      - "${APP_BIND}:3000:3000"
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ---------------------------------------------------------------- media server
+  plex:
+    <<: *lsio
+    image: lscr.io/linuxserver/plex:${PLEX_TAG}
+    container_name: plex
+    environment:
+      <<: *lsio-env
+      # The image ships Plex; do not let Plex self-update inside the container.
+      VERSION: docker
+      # Only used on the first start to bind the server to your account.
+      PLEX_CLAIM: ${PLEX_CLAIM}
+    volumes:
+      - ${CONFIG_ROOT}/plex:/config
+      # Plex only reads the library; it never needs to see downloads.
+      - ${DATA_ROOT}/media:/data/media:ro
+    # Host network, on purpose: behind a published port Plex sees every client
+    # as the Docker bridge address (the userland proxy hides the real one), so
+    # it cannot tell a living-room TV from a viewer on the internet and treats
+    # them all as remote - bandwidth caps and remote quality for everyone.
+    # On the host network it sees real addresses and PLEX_LAN_NETWORKS works.
+    # Plex listens on 32400/tcp (plus its GDM/DLNA discovery ports); the other
+    # containers reach it at LAN_IP:32400, never by a service name.
+    network_mode: host
+    healthcheck:
+      # Unauthenticated endpoint; answers as soon as the server is serving.
+      test: ["CMD", "curl", "-fsS", "http://localhost:32400/identity"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  jellyfin:
+    # Second media server, tried alongside Plex: same read-only library, its
+    # own users and watch state. Seerr keeps talking to Plex (one server per
+    # Seerr instance).
+    <<: *lsio
+    image: lscr.io/linuxserver/jellyfin:${JELLYFIN_TAG}
+    container_name: jellyfin
+    environment:
+      <<: *lsio-env
+      # Address Jellyfin advertises to clients that discover it (LAN only).
+      JELLYFIN_PublishedServerUrl: "http://jellyfin.${SITE_DOMAIN}"
+    volumes:
+      - ${CONFIG_ROOT}/jellyfin:/config
+      - ${DATA_ROOT}/media:/data/media:ro
+    ports:
+      - "${APP_BIND}:8096:8096"
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8096/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # ---------------------------------------------------------------- *arr apps
+  sonarr:
+    <<: *lsio
+    image: lscr.io/linuxserver/sonarr:${SONARR_TAG}
+    container_name: sonarr
+    volumes:
+      - ${CONFIG_ROOT}/sonarr:/config
+      - ${DATA_ROOT}:/data
+      # Release guard (scripts/release-guard.sh), run as a Custom Script connection.
+      - ./scripts:/scripts:ro
+    environment:
+      <<: *lsio-env
+      # How far a file's duration may differ from the published runtime before
+      # the guard rejects it as a fake (see .env.example).
+      GUARD_MIN_RATIO: ${GUARD_MIN_RATIO}
+      GUARD_MAX_RATIO: ${GUARD_MAX_RATIO}
+    ports:
+      - "${APP_BIND}:8989:8989"
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8989/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  radarr:
+    <<: *lsio
+    image: lscr.io/linuxserver/radarr:${RADARR_TAG}
+    container_name: radarr
+    volumes:
+      - ${CONFIG_ROOT}/radarr:/config
+      - ${DATA_ROOT}:/data
+      # Release guard (scripts/release-guard.sh), run as a Custom Script connection.
+      - ./scripts:/scripts:ro
+    environment:
+      <<: *lsio-env
+      # How far a file's duration may differ from the published runtime before
+      # the guard rejects it as a fake (see .env.example).
+      GUARD_MIN_RATIO: ${GUARD_MIN_RATIO}
+      GUARD_MAX_RATIO: ${GUARD_MAX_RATIO}
+    ports:
+      - "${APP_BIND}:7878:7878"
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7878/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  lidarr:
+    <<: *lsio
+    image: lscr.io/linuxserver/lidarr:${LIDARR_TAG}
+    container_name: lidarr
+    volumes:
+      - ${CONFIG_ROOT}/lidarr:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - "${APP_BIND}:8686:8686"
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8686/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  prowlarr:
+    <<: *lsio
+    image: lscr.io/linuxserver/prowlarr:${PROWLARR_TAG}
+    container_name: prowlarr
+    # Indexer manager only - it never touches media, so no /data mount.
+    volumes:
+      - ${CONFIG_ROOT}/prowlarr:/config
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost:9696/ping && curl -fsS -m 5 -o /dev/null http://localhost:8000/v1/publicip/ip"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Solves Cloudflare challenges for Prowlarr (indexers tagged "flaresolverr").
+  # Headless Chromium, so no PUID/PGID (its own unprivileged user) and no
+  # persistent state. Only Prowlarr talks to it: http://flaresolverr:8191, no
+  # published port.
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:${FLARESOLVERR_TAG}
+    container_name: flaresolverr
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      LOG_LEVEL: info
+      TZ: ${TZ}
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost:8191/ && curl -fsS -m 5 -o /dev/null http://localhost:8000/v1/publicip/ip"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Lets the dashboard show each container's state and stats without giving it
+  # the Docker socket, which is the whole host: the proxy answers only GET
+  # requests and only under /containers (POST=0 is the image's default, and
+  # every other endpoint group is left off). It publishes no port and lives on
+  # the internal network, so only the other containers can reach it.
+  #
+  # What it still exposes to anything on that network: /containers/{id}/json,
+  # which includes a container's environment - so the VPN private key and the
+  # apps' API keys are readable there. Homepage already holds those API keys in
+  # its own config; the VPN key is the new one. That is the price of the state
+  # and stats on the tiles, and it is why nothing else on the media network
+  # should be exposed to the outside.
+  dockerproxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:${DOCKERPROXY_TAG}
+    container_name: dockerproxy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      CONTAINERS: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:2375/containers/json?limit=1 >/dev/null"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Keeps the quality settings in Radarr and Sonarr in line with the TRaSH
+  # Guides: quality definitions, the custom-format collection with its scores
+  # and the guide's own quality profiles. configure.sh writes its config and
+  # runs a sync; the container then re-syncs on CRON_SCHEDULE, so a change
+  # upstream arrives without anyone doing anything. PUID/PGID are not supported
+  # by this image - it takes `user` instead.
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:${RECYCLARR_TAG}
+    container_name: recyclarr
+    restart: unless-stopped
+    user: ${PUID}:${PGID}
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ${CONFIG_ROOT}/recyclarr:/config
+    environment:
+      TZ: ${TZ}
+      CRON_SCHEDULE: ${RECYCLARR_SCHEDULE}
+    networks:
+      - media
+    # It serves nothing, so there is no endpoint to probe: the question is
+    # whether it is still syncing. A sync that finishes writes "Completed at"
+    # into its log, so a log from the last two days holding that line means the
+    # schedule is being kept - and heal.sh can restart it when it is not, which
+    # it cannot do for a container with no health check at all. An installation
+    # that has not synced yet has no logs and counts as healthy; the first
+    # ./configure.sh run syncs and creates them.
+    healthcheck:
+      test: ["CMD-SHELL", "[ ! -d /config/logs/cli ] || find /config/logs -name '*.log' -mtime -2 -exec grep -l 'Completed at' {} + 2>/dev/null | grep -q ."]
+      interval: 30m
+      timeout: 15s
+      retries: 3
+      start_period: 2m
+
+  bazarr:
+    <<: *lsio
+    image: lscr.io/linuxserver/bazarr:${BAZARR_TAG}
+    container_name: bazarr
+    volumes:
+      - ${CONFIG_ROOT}/bazarr:/config
+      # Same path Sonarr/Radarr report, so Bazarr needs no path mapping.
+      # Read-write: subtitle files are written next to the media.
+      - ${DATA_ROOT}/media:/data/media
+    ports:
+      - "${APP_BIND}:6767:6767"
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:6767/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ---------------------------------------------------------------- requests
+  seerr:
+    image: ghcr.io/seerr-team/seerr:${SEERR_TAG}
+    container_name: seerr
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # Not an LSIO image: no PUID/PGID support, so run as that user directly.
+    user: "${PUID}:${PGID}"
+    environment:
+      TZ: ${TZ}
+      LOG_LEVEL: info
+      PORT: 5055
+    volumes:
+      - ${CONFIG_ROOT}/seerr:/app/config
+    ports:
+      - "${APP_BIND}:5055:5055"
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:5055/api/v1/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Spotnet indexer, reached by Prowlarr as a Newznab source. Not an LSIO image,
+  # but it has the same `abc` user and honours PUID/PGID/TZ. Deliberately NOT in
+  # Gluetun's namespace: like SABnzbd it talks to the Usenet provider, which
+  # knows the account whatever address it arrives from, and Prowlarr reaches it
+  # over the bridge - see README "Spotweb, the Spotnet indexer".
+  spotweb:
+    image: erikdevries/spotweb:${SPOTWEB_TAG}
+    container_name: spotweb
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+      # SQLite keeps this to one container: the file lives on the config volume,
+      # so there is no database service, no generated password and no wait.
+      DB_ENGINE: pdo_sqlite
+      DB_NAME: /config/spotweb.db3
+      # The image writes this straight into a crontab. Assembled here from a
+      # plain integer so .env holds no value with spaces.
+      CRON_INTERVAL: "*/${SPOTWEB_INTERVAL_MIN} * * * *"
+      ACCESS_LOG: /dev/null
+    volumes:
+      - ${CONFIG_ROOT}/spotweb:/config
+      - ${CONFIG_ROOT}/spotweb/cache:/app/cache
+      # One-character fix for an upstream search bug that Sonarr and Radarr hit
+      # constantly - see the file's own header, and README "Spotweb, the
+      # Spotnet indexer". configure.sh warns if the image's copy moves on.
+      - ./spotweb/dbfts_abs.php:/app/lib/dbeng/dbfts_abs.php:ro
+    ports:
+      - "${APP_BIND}:8087:80"
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ---------------------------------------------------------------- download clients
+  sabnzbd:
+    <<: *lsio
+    image: lscr.io/linuxserver/sabnzbd:${SABNZBD_TAG}
+    container_name: sabnzbd
+    # SABnzbd rejects requests whose Host header is not whitelisted and it
+    # whitelists its own hostname on start; this makes http://sabnzbd:8080 work
+    # from Sonarr/Radarr without a manual host_whitelist entry.
+    hostname: sabnzbd
+    volumes:
+      - ${CONFIG_ROOT}/sabnzbd:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - "${APP_BIND}:8080:8080"
+    networks:
+      - media
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api?mode=version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  gluetun:
+    image: qmcgaw/gluetun:${GLUETUN_TAG}
+    container_name: gluetun
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      TZ: ${TZ}
+      VPN_SERVICE_PROVIDER: protonvpn
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: ${VPN_WIREGUARD_PRIVATE_KEY}
+      SERVER_COUNTRIES: ${VPN_SERVER_COUNTRIES}
+      PORT_FORWARD_ONLY: "on"
+      VPN_PORT_FORWARDING: "on"
+      # Runs inside this namespace, where 127.0.0.1:8081 is qBittorrent
+      # (configure.sh lets localhost in without a password in VPN mode), so
+      # incoming peers work as soon as the provider hands out a port.
+      # Only the port: binding qBittorrent to the tunnel interface adds
+      # nothing over the firewall above and breaks its DHT. Changing the port
+      # while qBittorrent runs leaves its DHT dead until it restarts, which is
+      # what configure.sh's VPN step does when it finds the two out of step.
+      VPN_PORT_FORWARDING_UP_COMMAND: >-
+        /bin/sh -c "wget -qO- --retry-connrefused --tries=10
+        --post-data 'json={\"listen_port\":{{PORT}}}'
+        http://127.0.0.1:8081/api/v2/app/setPreferences"
+      UPDATER_PERIOD: 24h
+    volumes:
+      - ./gluetun/auth.toml:/gluetun/auth/config.toml:ro
+    ports:
+      # The UIs of the containers sharing this namespace, on the same host
+      # ports as before, so the reverse proxy and the README are unchanged.
+      - "${APP_BIND}:8081:8081"
+      - "${APP_BIND}:9696:9696"
+    networks:
+      - media
+    # Gluetun ships its own health check (tunnel up and reachable).
+
+  qbittorrent:
+    <<: *lsio
+    image: lscr.io/linuxserver/qbittorrent:${QBITTORRENT_TAG}
+    container_name: qbittorrent
+    environment:
+      <<: *lsio-env
+      # Must equal the published host port: qBittorrent validates the Host
+      # header's port against this value and answers 401 on a mismatch.
+      WEBUI_PORT: 8081
+      # No TORRENTING_PORT: the provider decides the listening port and hands it
+      # to qBittorrent on every reconnection, so the value in its own config has
+      # to survive a restart. The image would force this one back on every start.
+    volumes:
+      - ${CONFIG_ROOT}/qbittorrent:/config
+      - ${DATA_ROOT}:/data
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    healthcheck:
+      # Gluetun's control API as well as the login page: when Gluetun restarts,
+      # this container is left in the old, dead namespace, where its own UI
+      # still answers and Docker would keep calling it healthy.
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost:8081/ && curl -fsS -m 5 -o /dev/null http://localhost:8000/v1/publicip/ip"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

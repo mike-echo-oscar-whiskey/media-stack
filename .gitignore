@@ -1,0 +1,21 @@
+# Runtime state - never commit. Application databases, API keys, Plex tokens
+# and downloaded media all live here.
+/config/
+/data/
+
+# Host-specific values and the Plex claim token.
+/.env
+
+# Local Compose overrides that are not meant to be shared.
+/compose.override.yml
+
+# Config snapshots and image records written by update.sh (contain .env).
+/backups/
+/.env.*
+# ...but the template is the one thing that must be in the repository.
+!/.env.example
+# Names your family; the example is the template
+/jellyfin-users.json
+
+# Byte-code from lib/recyclarr-config.py.
+__pycache__/

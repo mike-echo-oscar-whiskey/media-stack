@@ -1,0 +1,85 @@
+# Example reverse proxy for the media stack: one hostname per app, no ports.
+#
+# Meant for a Caddy that runs ON THE HOST network (network_mode: host, or a
+# native install), next to the stack, so it reaches the apps on the localhost
+# ports that APP_BIND=127.0.0.1 exposes. Set SITE_DOMAIN in its environment
+# (same value as in .env) and make your DNS resolve *.SITE_DOMAIN to this host.
+#
+# Plain HTTP (explicit http:// per site, so nothing binds :443): private names
+# cannot get public certificates and the LAN/VPN is the trust boundary. For
+# HTTPS use Caddy's internal CA or a real domain.
+{
+	admin off
+}
+
+# Anything that matches no hostname below (e.g. the bare IP) lands on the
+# dashboard. /healthz answers from Caddy itself.
+:80 {
+	handle /healthz {
+		respond "ok" 200
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}
+
+http://media.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:3000
+}
+
+http://plex.{$SITE_DOMAIN} {
+	# Plex answers 401 on "/" without a token; the web app lives under /web.
+	redir / /web 302
+	reverse_proxy 127.0.0.1:32400
+}
+
+http://jellyfin.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:8096
+}
+
+http://sonarr.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:8989
+}
+
+http://spotweb.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:8087
+}
+
+http://radarr.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:7878
+}
+
+http://prowlarr.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:9696
+}
+
+http://bazarr.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:6767
+}
+
+http://ntfy.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:8090
+}
+
+http://seerr.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:5055
+}
+
+http://lidarr.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:8686
+}
+
+
+# qBittorrent must see the browser's real Host: its CSRF check compares it
+# with Origin/Referer, and a Host without a port passes its port check.
+http://qbittorrent.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:8081
+}
+
+# SABnzbd only accepts whitelisted host names; sending its own host:port
+# satisfies that without changing anything inside the app.
+http://sabnzbd.{$SITE_DOMAIN} {
+	reverse_proxy 127.0.0.1:8080 {
+		header_up Host {upstream_hostport}
+	}
+}

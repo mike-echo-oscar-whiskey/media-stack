@@ -1,0 +1,30 @@
+[
+  {
+    "_comment": [
+      "Jellyfin accounts managed by ./configure.sh. Copy to jellyfin-users.json (gitignored: it names",
+      "your family) and edit. One object per user; this first object is documentation and is ignored.",
+      "name       the Jellyfin user name (created when missing, without a password)",
+      "role       admin | adult | child. admin: every library, every right. adult: may not delete",
+      "           media or control other people's players. child: as adult, plus a parental rating",
+      "           cap, unrated items blocked, no SyncPlay.",
+      "rating     maximum parental rating for a child (12, 9, ...)",
+      "libraries  list of library names as shown in Jellyfin, or the string \"all\"",
+      "livetv     may watch Live TV                                   (default false)",
+      "channels   may open plugin channels, e.g. what the Live TV plugin publishes (default false)",
+      "hidden     not shown on the login screen                       (default false)",
+      "nopass     signs in without a password; one set in the UI is removed again (default false;",
+      "           not possible for an admin, Jellyfin refuses it)",
+      "rich       backdrops, theme media, details banner, next-episode overlay, episode stills,",
+      "           Collections view, set on every run                   (default false)",
+      "audio      preferred audio language, ISO 639-2 (nld, eng): that track plays when present",
+      "subtitles  preferred subtitle language; when set, subtitles are always shown",
+      "Rights and preferences are re-applied on every run, so edit them here, not in the UI.",
+      "Users that exist in Jellyfin but not here are left alone, never deleted."
+    ]
+  },
+  { "name": "Parent",     "role": "admin",                 "libraries": "all",                                                  "livetv": true, "rich": true },
+  { "name": "Partner",    "role": "adult",                 "libraries": ["Movies", "TV Shows", "Music"],                        "channels": true, "nopass": true, "rich": true },
+  { "name": "Teen",       "role": "adult",                 "libraries": ["Movies", "TV Shows", "Music"],                        "channels": true, "nopass": true, "rich": true, "audio": "eng", "subtitles": "nld" },
+  { "name": "Kid",        "role": "child", "rating": 12,   "libraries": ["Movies", "TV Shows", "Movies (Dutch)", "TV Shows (Dutch)"], "nopass": true, "rich": true, "audio": "nld" },
+  { "name": "Little kid", "role": "child", "rating": 9,    "libraries": ["Movies (Dutch)", "TV Shows (Dutch)"],                 "nopass": true, "rich": true, "audio": "nld" }
+]
