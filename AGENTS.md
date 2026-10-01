@@ -195,6 +195,20 @@ Each of these cost a debugging session, and none can be read off the code.
   lives in the rclone container's writable layer, not under `DATA_ROOT`, so recreating the
   container empties it at once - the fast way out of a full disk, but only after `vfs/stats`
   says the uploads have drained.
+- **Recreating the rclone container is only safe between mover passes.** The cache-flush trick
+  above is not safe at any moment: do it while the mountpoint is in use and the container dies
+  with the mount still held, leaving a dead FUSE endpoint - listed in `/proc/mounts`, answering
+  `Transport endpoint is not connected`, invisible to `mountpoint -q`, and refusing every attempt
+  by the new container with `failed to access mountpoint ... Socket not connected`. rclone then
+  restart-loops while the whole archive tier reads as missing. `fusermount3 -u` cannot clear it
+  ("not found in /etc/mtab") and the mount is root-owned, so recovery is `sudo umount -l <path>`
+  and nothing the stack can do for itself. The archive loop recreates between passes for exactly
+  this reason; an out-of-band recreate from another shell is what broke it.
+- **`RenameFiles` with an empty `files` list succeeds and renames nothing.** The command takes the
+  parent id *and* the file ids; `{name, seriesId, files: []}` is accepted, reports success, and is
+  a no-op. The ids come from the same `/api/v3/rename` response that said the names were stale -
+  `episodeFileId` in Sonarr, `movieFileId` in Radarr. Check a file on disk afterwards rather than
+  trusting the command's answer.
 - **Homepage polling qBittorrent with a stale login earns a one-hour IP ban** after five failures,
   which is why the login change stops Homepage before anything else runs.
 - Under `set -euo pipefail` a bare `return` after a failed test hands back that status and ends the

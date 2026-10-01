@@ -1853,6 +1853,16 @@ disk is already tight, recreating the rclone container empties the cache outrigh
 container's writable layer, not under `DATA_ROOT` — but only do that once the uploads have drained,
 which `docker compose exec rclone rclone rc --rc-addr 127.0.0.1:5572 vfs/stats` will tell you.
 
+`heal.sh` also renames files once a day whose stored title no longer matches what Sonarr or
+Radarr now know. The apps apply the naming format at import and never again, so an episode that
+was `TBA` or `Episode 1` when it arrived keeps that filename for ever, even after the metadata
+source fills the title in — `Outside (2026) - S01E01 - Episode 1` sat beside a Sonarr record
+reading *Losers Will Get Punished*. Both apps report the stale ones through `/api/v3/rename` and
+do the renaming themselves. It runs daily rather than every two minutes because it is one request
+per series and per film, and it skips entirely while `mover.sh` is running: renaming a title that
+is mid-flight between the branches is how you end up with two half-files. On the archive tier a
+rename is a server-side move — the backend reports `Move` and `DirMove`, so nothing is downloaded.
+
 #### Three things a real move taught
 
 None of them readable off the code:

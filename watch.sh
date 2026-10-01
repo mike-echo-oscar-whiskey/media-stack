@@ -194,7 +194,20 @@ check_archive_mount() {
     docker compose exec -T "$c" sh -c 'stat -f -c %T /data/media 2>/dev/null | grep -q fuse' \
       || mounted=0
   done
-  mountpoint -q "${DATA_ROOT:-./data}/archive/media" || mounted=0
+  # A dead FUSE endpoint is its own case and needs its own advice. When a
+  # container is recreated while the mountpoint is still in use, the mount stays
+  # listed in /proc/mounts but answers ENOTCONN: mountpoint says "no", rclone
+  # restart-loops on "failed to access mountpoint ... Socket not connected", and
+  # the unit and the container logs both look fine. Only root can detach it, so
+  # pointing at systemctl and docker logs sends you the wrong way.
+  local archive_dir stale=0
+  archive_dir="$(readlink -f "${DATA_ROOT:-./data}/archive")/media"
+  if ! mountpoint -q "$archive_dir"; then
+    mounted=0
+    if grep -qF " $archive_dir " /proc/mounts 2>/dev/null && ! stat "$archive_dir" >/dev/null 2>&1; then
+      stale=1
+    fi
+  fi
 
   mkdir -p backups
   [[ -f "$ARCHIVE_STATE" ]] || echo '{"broken":false,"strikes":0}' > "$ARCHIVE_STATE"
@@ -213,9 +226,14 @@ check_archive_mount() {
     strikes=$(( strikes + 1 ))
     state=$(jq -c --argjson n "$strikes" '.strikes = $n' <<<"$state")
     if (( strikes >= ARCHIVE_STRIKES )) && [[ "$was" != true ]]; then
-      alerts_on health && ntfy_push "The archive is not readable" \
-        "/data/media is not the union in Sonarr or Radarr, or the cloud branch is unmounted, so everything archived reads as missing. Check: systemctl status media-stack-union, then docker compose logs rclone" health
-      log "archive: the union is not assembled after $strikes runs"
+      local why
+      if (( stale )); then
+        why="The cloud branch is a dead FUSE endpoint: still listed in /proc/mounts but answering \"Transport endpoint is not connected\". rclone cannot mount over it and will restart-loop. Only root can detach it: sudo umount -l $archive_dir, then docker compose restart rclone. systemctl and docker logs will both look healthy - they are not where the fault is."
+      else
+        why="/data/media is not the union in Sonarr or Radarr, or the cloud branch is unmounted, so everything archived reads as missing. Check: systemctl status media-stack-union, then docker compose logs rclone"
+      fi
+      alerts_on health && ntfy_push "The archive is not readable" "$why" health
+      log "archive: the union is not assembled after $strikes runs$( (( stale )) && echo " (dead FUSE endpoint - needs a root umount -l)" )"
       state=$(jq -c '.broken = true' <<<"$state")
     fi
   fi

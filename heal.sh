@@ -28,6 +28,7 @@ HERE=$(pwd)
 UNIT=media-stack-heal
 STATUS=backups/last-heal.txt
 DISK_STATE=backups/disk-alerts.json
+RENAME_STATE=backups/last-rename.txt
 
 log()  { printf '%s  %s\n' "$(date '+%F %T')" "$*"; }
 note() { mkdir -p backups; printf '%s  %s\n' "$(date '+%F %T')" "$*" > "$STATUS"; }
@@ -620,6 +621,51 @@ UNIT
   fi
 }
 
+# Sonarr and Radarr apply the naming format when a file is imported and never
+# again, so a title that was "TBA" or "Episode 1" on import keeps that name for
+# ever - even once the metadata source fills it in. Both apps will say which
+# files are out of date (/api/v3/rename), and both will do the renaming
+# themselves; nothing here touches the filesystem.
+#
+# Two reasons this is daily rather than every two minutes. It is one call per
+# series and per film - 185 here - and the answer changes about as often as
+# TVDB gets edited. And a rename of an archived file is a server-side move on
+# the remote (the backend reports Move and DirMove, so no bytes come down), but
+# it must not race the mover: a title can be mid-flight between the branches,
+# and renaming it then is how you get two half-files.
+rename_stale_files() {
+  local today; today=$(date '+%F')
+  [[ "$(cat "$RENAME_STATE" 2>/dev/null)" == "$today" ]] && return 0
+  pgrep -f '[m]over.sh' >/dev/null && return 0
+  docker compose ps --services --status running 2>/dev/null | grep -qx sonarr || return 0
+
+  # RenameFiles wants the file ids as well as the parent id. Passing an empty
+  # `files` is accepted, reports success and renames nothing - which is exactly
+  # what it did on the first attempt here.
+  local app name port v idkey filekey listpath key ids id files n total=0
+  for app in sonarr:8989:v3:seriesId:episodeFileId:series radarr:7878:v3:movieId:movieFileId:movie; do
+    IFS=: read -r name port v idkey filekey listpath <<<"$app"
+    key=$(sed -n 's/.*<ApiKey>\(.*\)<\/ApiKey>.*/\1/p' "config/$name/config.xml" 2>/dev/null)
+    [[ -n "$key" ]] || continue
+    ids=$(curl -fsS -m 20 -H "X-Api-Key: $key" "http://localhost:$port/api/$v/$listpath" 2>/dev/null \
+          | jq -r '.[]?.id') || continue
+    while IFS= read -r id; do
+      [[ -n "$id" ]] || continue
+      files=$(curl -fsS -m 20 -H "X-Api-Key: $key" "http://localhost:$port/api/$v/rename?$idkey=$id" 2>/dev/null \
+              | jq -c --arg f "$filekey" 'if type == "array" then [.[] | .[$f]] else [] end') || continue
+      n=$(jq 'length' <<<"$files")
+      (( n > 0 )) || continue
+      curl -fsS -m 30 -o /dev/null -X POST -H "X-Api-Key: $key" -H 'Content-Type: application/json' \
+        --data "$(jq -cn --arg k "$idkey" --argjson i "$id" --argjson f "$files" '{name: "RenameFiles", ($k): $i, files: $f}')" \
+        "http://localhost:$port/api/$v/command" 2>/dev/null \
+        && { total=$(( total + n )); log "$name: renamed $n file(s) whose title had changed since import ($listpath $id)"; }
+    done <<<"$ids"
+  done
+  printf '%s' "$today" > "$RENAME_STATE"
+  (( total > 0 )) && note "renamed $total file(s) to match their current metadata"
+  return 0
+}
+
 show_status() {
   echo "last result: $(cat "$STATUS" 2>/dev/null || echo 'never run')"
   systemctl --user list-timers "$UNIT.timer" --no-pager 2>/dev/null | head -2 || echo "timer not installed (./heal.sh install)"
@@ -628,7 +674,7 @@ show_status() {
 
 case "${1:-}" in
   "")       if [[ -f .env ]]; then set -a; source .env; set +a; fi
-            heal; check_disk_space; evict_failed_torrents; evict_poisoned_downloads; evict_stalled_metadata; evict_superseded_torrents; reclaim_orphaned_downloads; reclaim_orphaned_usenet; enforce_share_limits ;;
+            heal; check_disk_space; evict_failed_torrents; evict_poisoned_downloads; evict_stalled_metadata; evict_superseded_torrents; reclaim_orphaned_downloads; reclaim_orphaned_usenet; enforce_share_limits; rename_stale_files ;;
   install)  install_timer ;;
   status)   show_status ;;
   *) echo "usage: $0 [install|status]" >&2; exit 2 ;;
