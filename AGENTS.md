@@ -148,6 +148,21 @@ Each of these cost a debugging session, and none can be read off the code.
   internet access denied" while every check run on this host passes, because loopback is always
   local. Caddy does not hide the client - SABnzbd reads `X-Forwarded-For` and checks every hop.
   Test this one from the device that was refused.
+- **Renaming on import destroys the only evidence of what a release was.** An audio-description
+  release announces itself in the release *title* - "Rick and Morty S01E01 Pilot with Audio
+  Description 1080p AMZN...-Kitsune" - and the file is then renamed to the naming format, which
+  keeps the quality tags and drops everything else. Eighteen such files sat in the library looking
+  exactly like good ones, and judging them by the name on disk says the release could not have been
+  caught. It could: `/api/v3/history?episodeId=N&eventType=1` still holds the grabbed title, and
+  that is what a `ReleaseTitleSpecification` custom format reads. Ask history what was grabbed
+  before concluding a release was unmarked, and never infer a release's contents from the renamed
+  file.
+- **A guide custom-format group whose members are all `required: false` syncs nothing when added.**
+  `[Optional] Accessibility` holds WiTH AD / ASL / BASL / BSL, every one optional, so the group must
+  name them under `select` - adding `{trash_id, exclude: null, select: null}` is accepted by
+  Recyclarr, reports "All custom formats are already up to date", and produces no formats at all.
+  `lib/recyclarr-config.py` reads the group's json and selects every member rather than listing
+  ids, because the ids differ per app and a fifth variant would otherwise be missed silently.
 - **The disk brake cannot stop rclone's cache, which is the thing that fills the disk.**
   `--vfs-cache-mode full` puts every archived file through the local cache on its way up, so a
   mover run frees bytes from the library and spends them again on cache - and `df` only recovers

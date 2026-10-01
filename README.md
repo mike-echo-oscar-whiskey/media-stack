@@ -1137,6 +1137,17 @@ below are this stack's own and everything after them is the guides':
   only what a profile template asks for and none of the templates this stack uses asks for it. It
   refuses any release that dropped the original audio — a Dutch-only dub included, which is the
   point: the file has to work for everyone in the house;
+- the guides' **[Optional] Accessibility** group, whose four formats — *WiTH AD*, *WiTH ASL*,
+  *WiTH BASL*, *WiTH BSL* — all score **−10000**. An accessibility release carries a narration of
+  what is on screen, or a sign-language inset, *instead of* the normal audio: the file has one
+  audio track and it is the description. Nothing downstream can repair that, because there is no
+  second track to switch to, and neither app's `mediaInfo` records track titles or dispositions, so
+  the release guard cannot recognise it on import either. The release title is the only place it is
+  ever stated — `Rick and Morty S01E01 Pilot with Audio Description …-Kitsune`, `… .MULTi.AD.…` —
+  and renaming on import throws that away, which is why the library looks blameless afterwards. The
+  group's formats are all optional, so `lib/recyclarr-config.py` has to name them in `select`;
+  adding the group alone syncs nothing. Note what this does **not** refuse: a release carrying a
+  descriptive track *beside* a normal one is a choice, not a defect, and only its score suffers;
 - the two dub formats at **+500**, with `minFormatScore` left at the guides' `0`. A preference,
   never a requirement: a film with no dub available downloads exactly as it would without this
   section, instead of sitting in the wanted list forever;

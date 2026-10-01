@@ -159,6 +159,28 @@ for name in names:
     for group in formats.get("skip") or []:
         skips.append(group)
 
+# Accessibility releases carry a narration or a signer instead of the normal
+# audio - "Rick and Morty S01E01 Pilot with Audio Description ...-Kitsune" has
+# one audio track and it is the description of what is on screen. Nothing in the
+# library can repair that: there is no second track to switch to, and the apps'
+# own mediaInfo records neither track titles nor dispositions, so the release
+# guard cannot see it on import either. The release title is the only place it
+# is ever stated, which is exactly what a custom format reads - and the renamed
+# file loses it, which is why the library looks blameless.
+#
+# The guide ships the group and scores every member -10000. Its formats are all
+# optional, so the group has to name them in `select` or adding it does nothing.
+# Read rather than listed, because the ids differ per app and a fifth variant
+# would otherwise be silently missed.
+accessibility = guides / "cf-groups" / "optional-accessibility.json"
+if accessibility.is_file():
+    import json
+    g = json.loads(accessibility.read_text())
+    picks = [c["trash_id"] for c in g.get("custom_formats") or []]
+    if picks and g.get("trash_id") not in seen:
+        seen.add(g["trash_id"])
+        groups.append({"trash_id": g["trash_id"], "exclude": None, "select": picks})
+
 merged["media_naming"] = MEDIA_NAMING[app]
 merged["quality_profiles"] = profiles
 merged["custom_format_groups"] = {"add": groups}
