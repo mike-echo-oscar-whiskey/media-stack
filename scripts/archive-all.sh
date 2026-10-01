@@ -38,7 +38,10 @@ MIN_AGE=$(sed -n 's/^ARCHIVE_MIN_AGE_DAYS=//p' .env 2>/dev/null); MIN_AGE=${MIN_
 say() { printf '%s  %s\n' "$(date '+%F %T')" "$*"; }
 rc()  { docker exec rclone rclone rc --rc-addr 127.0.0.1:5572 "$@" 2>/dev/null; }
 eligible() {
-  find data/local/media -type f -links 1 -size +"${MIN_MIB}"M -mtime +"$MIN_AGE" -printf '%s\n' 2>/dev/null \
+  # -mmin and the same arithmetic as mover.sh: -mtime counts whole days, so
+  # ARCHIVE_MIN_AGE_DAYS=0 would leave this loop seeing only files over 24h old
+  # and stopping while the mover still had hundreds of GiB it was willing to take.
+  find data/local/media -type f -links 1 -size +"${MIN_MIB}"M -mmin +"$(( MIN_AGE * 1440 ))" -printf '%s\n' 2>/dev/null \
     | awk '{s+=$1;n++} END {printf "%d %d\n", n+0, s+0}'
 }
 # Runtime only - .env keeps ARCHIVE_UPLOAD_WINDOW, so the cap comes back of its
