@@ -163,6 +163,17 @@ Each of these cost a debugging session, and none can be read off the code.
   Recyclarr, reports "All custom formats are already up to date", and produces no formats at all.
   `lib/recyclarr-config.py` reads the group's json and selects every member rather than listing
   ids, because the ids differ per app and a fifth variant would otherwise be missed silently.
+  The corollary bit immediately afterwards: **a template may already list the group with no
+  `select`**, so a writer that skips a group it has "already seen" adds the formats for one app and
+  silently not the other. Sonarr's templates list `[Optional] Language Profiles` exactly that way.
+  Merge the selection into the existing entry instead of skipping it, and check both generated
+  configs rather than one.
+- **Recyclarr adopts a hand-built custom format by name, and then owns it.** Replacing one of ours
+  with the guide's does not duplicate it: the id stays (44 in Sonarr, 93 in Radarr) and the
+  contents are overwritten to match the guide. There is no cache file to inspect in v8, and the
+  "Skipped N Custom Formats that did not change" count does not move when the format already
+  matched - so neither proves anything. Compare a field the two versions spell differently: ours
+  named the specification "Original", the guide names it "Not Original Language".
 - **The disk brake cannot stop rclone's cache, which is the thing that fills the disk.**
   `--vfs-cache-mode full` puts every archived file through the local cache on its way up, so a
   mover run frees bytes from the library and spends them again on cache - and `df` only recovers

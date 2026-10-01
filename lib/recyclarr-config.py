@@ -159,27 +159,56 @@ for name in names:
     for group in formats.get("skip") or []:
         skips.append(group)
 
-# Accessibility releases carry a narration or a signer instead of the normal
-# audio - "Rick and Morty S01E01 Pilot with Audio Description ...-Kitsune" has
-# one audio track and it is the description of what is on screen. Nothing in the
-# library can repair that: there is no second track to switch to, and the apps'
-# own mediaInfo records neither track titles nor dispositions, so the release
-# guard cannot see it on import either. The release title is the only place it
-# is ever stated, which is exactly what a custom format reads - and the renamed
-# file loses it, which is why the library looks blameless.
+# Guide groups this stack asks for by name. Recyclarr syncs a group only when a
+# profile template asks for it and none of the templates used here do - but a
+# group listed with an explicit `select` is pulled in regardless, which is how
+# these arrive without adopting a whole language or accessibility template. The
+# members are all `required: false`, so the `select` is not optional: added
+# without one, Recyclarr accepts the config, reports everything up to date and
+# syncs no formats at all.
 #
-# The guide ships the group and scores every member -10000. Its formats are all
-# optional, so the group has to name them in `select` or adding it does nothing.
-# Read rather than listed, because the ids differ per app and a fifth variant
-# would otherwise be silently missed.
-accessibility = guides / "cf-groups" / "optional-accessibility.json"
-if accessibility.is_file():
+# Members are read from the guide's own json rather than listed as ids, because
+# the ids differ per app and a new variant would otherwise be missed silently.
+EXTRA_GROUPS = {
+    # Every member. An accessibility release carries a narration of what is on
+    # screen, or a sign-language inset, *instead of* the normal audio - the file
+    # has one audio track and it is the description. Nothing downstream can
+    # repair that, and neither app records track titles in its own mediaInfo, so
+    # the release title is the only place it is ever stated. The guide scores
+    # them all -10000.
+    "optional-accessibility": None,
+    # One member. The guides own "Language: Not Original" - a negated
+    # LanguageSpecification on "Original", scored -10000 - and this stack used to
+    # rebuild it by hand in lib/profiles.sh for want of a template that asks for
+    # it. The rest of the group is German and French profiles that do not apply.
+    "optional-language-profiles": {"Language: Not Original"},
+}
+
+for group_file, wanted in EXTRA_GROUPS.items():
+    path = guides / "cf-groups" / f"{group_file}.json"
+    if not path.is_file():
+        raise SystemExit(f"the guide no longer ships the {app} group {group_file!r}")
     import json
-    g = json.loads(accessibility.read_text())
-    picks = [c["trash_id"] for c in g.get("custom_formats") or []]
-    if picks and g.get("trash_id") not in seen:
+    g = json.loads(path.read_text())
+    members = g.get("custom_formats") or []
+    picks = [c["trash_id"] for c in members if wanted is None or c["name"] in wanted]
+    if wanted is not None:
+        missing = wanted - {c["name"] for c in members}
+        if missing:
+            raise SystemExit(f"{app}: {group_file} no longer holds {sorted(missing)}")
+    if not picks:
+        continue
+    # A template may already list the group - Sonarr's do, with no `select`,
+    # which syncs none of it because every member is optional. Merge into that
+    # entry rather than skipping it on "already seen", or the formats arrive for
+    # one app and silently not the other.
+    existing = next((e for e in groups if e["trash_id"] == g["trash_id"]), None)
+    if existing is None:
         seen.add(g["trash_id"])
         groups.append({"trash_id": g["trash_id"], "exclude": None, "select": picks})
+    else:
+        have = existing.get("select") or []
+        existing["select"] = have + [t for t in picks if t not in have]
 
 merged["media_naming"] = MEDIA_NAMING[app]
 merged["quality_profiles"] = profiles

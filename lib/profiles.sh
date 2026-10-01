@@ -184,7 +184,9 @@ configure_lidarr_formats() {
 #     pick a multi-language WEB-DL over an English-only Bluray - and the
 #     multi-language masters are streaming rips. Remux stays above the group.
 #   - "Language: Not Original" scores -10000, so a release that dropped the
-#     original audio is refused. That is what keeps English in the file.
+#     original audio is refused. That is what keeps English in the file. The
+#     format and the score are the guides' own and Recyclarr syncs both; only
+#     the group that carries it is asked for here.
 #   - The dub formats score +500: a preference, never a requirement.
 #     minFormatScore stays at the guide's 0, so a film with no dub available
 #     downloads exactly as it did before.
@@ -204,7 +206,6 @@ configure_dub_preference() {      # configure_dub_preference APP URL
   cf_begin "$app" "$url"
   if [[ -n "$DUB_CODE" ]]; then
     dub_formats "$url"
-    NOT_ORIGINAL_ID=$(cf_not_original)
     for v in $QUALITY_VARIANTS; do
       dub_prefer "$(recyclarr_profile "$app" "$v")"
     done
@@ -240,23 +241,6 @@ dub_formats() {                   # dub_formats URL
     '[$a] + (if $t == "" then [] else [($t|tonumber)] end)')
 }
 
-# TRaSH's own format, rebuilt here rather than imported because Recyclarr syncs
-# only what a profile template asks for and no template we use asks for this
-# one. A single LanguageSpecification on "Original" (-2), negated.
-cf_not_original() {               # cf_not_original -> id
-  local name="Language: Not Original" id
-  id=$(jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | .id // empty' <<<"$CF_FMT")
-  if [[ -n "$id" ]]; then skip "custom format \"$name\"" >&2; printf '%s' "$id"; return 0; fi
-  id=$(cf_post "$(jq -c --arg n "$name" '
-    {name:$n, includeCustomFormatWhenRenaming:false,
-     specifications:[ first(.[] | select(.implementation == "LanguageSpecification"))
-       | del(.presets, .infoLink, .implementationName)
-       | .name = "Original" | .negate = true | .required = true
-       | .fields |= map(if .name == "value" then .value = -2 else . end) ]}' <<<"$CF_SCHEMA")")
-  ok "custom format \"$name\"" >&2
-  printf '%s' "$id"
-}
-
 # Only the three scores. The quality merge is written into Recyclarr's own
 # config instead (lib/recyclarr-config.py), because Recyclarr syncs nightly and
 # puts a hand-merged profile straight back. Scores are the opposite case:
@@ -268,11 +252,13 @@ dub_prefer() {                    # dub_prefer GUIDE_PROFILE
   current=$(jq -c --arg n "$base" 'first(.[] | select(.name == $n)) // empty' <<<"$profiles")
   [[ -n "$current" ]] || die "Recyclarr has not created the profile \"$base\" in $CF_APP yet"
   id=$(jq -r .id <<<"$current")
-  wanted=$(jq -c --argjson dub "$DUB_IDS" --argjson no "$NOT_ORIGINAL_ID" --argjson s "$DUB_SCORE" '
+  # Only the dub formats. "Language: Not Original" is the guides' own and
+  # Recyclarr now syncs it, score included, through the [Optional] Language
+  # Profiles group in lib/recyclarr-config.py - so setting it here as well would
+  # be two owners for one number.
+  wanted=$(jq -c --argjson dub "$DUB_IDS" --argjson s "$DUB_SCORE" '
     .formatItems |= map(
-      if   (.format == $no)                   then .score = -10000
-      elif (.format as $i | $dub | index($i)) then .score = $s
-      else . end)' <<<"$current")
+      if (.format as $i | $dub | index($i)) then .score = $s else . end)' <<<"$current")
   if [[ "$(jq -cS . <<<"$wanted")" == "$(jq -cS . <<<"$current")" ]]; then
     skip "quality profile \"$base\""
   else

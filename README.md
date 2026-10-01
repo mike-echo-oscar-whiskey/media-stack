@@ -1133,10 +1133,15 @@ below are this stack's own and everything after them is the guides':
   A regional dub is a language of its own in both apps, so `pt` also accepts
   *Portuguese (Brazil)* and `es` also accepts *Spanish (Latino)*; without that a Brazilian or
   Latin-American dub would never match;
-- *Language: Not Original* at **−10000**, the guides' format rebuilt here because Recyclarr syncs
-  only what a profile template asks for and none of the templates this stack uses asks for it. It
-  refuses any release that dropped the original audio — a Dutch-only dub included, which is the
-  point: the file has to work for everyone in the house;
+- the guides' *Language: Not Original* at **−10000**, which refuses any release that dropped the
+  original audio — a Dutch-only dub included, which is the point: the file has to work for everyone
+  in the house. The format and its score are both the guides', synced by Recyclarr; this stack only
+  asks for the group that carries it. It used to be rebuilt here by hand, on the reasoning that
+  Recyclarr syncs only what a profile template asks for and no template used here asks for this
+  one. That is true and was never the whole story: a **custom-format group named with an explicit
+  `select`** is synced whether or not a template wants it, which is how both this and the
+  accessibility formats below arrive without adopting a German or French template wholesale. Two
+  owners for one score is a bug waiting to happen, so `dub_prefer` no longer touches it;
 - the guides' **[Optional] Accessibility** group, whose four formats — *WiTH AD*, *WiTH ASL*,
   *WiTH BASL*, *WiTH BSL* — all score **−10000**. An accessibility release carries a narration of
   what is on screen, or a sign-language inset, *instead of* the normal audio: the file has one
