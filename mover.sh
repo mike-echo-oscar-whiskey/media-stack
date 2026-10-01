@@ -186,7 +186,12 @@ archive_files() {
       rm -f "$dest.part" 2>/dev/null || true
       log "  FAILED $rel - left where it is"
     fi
-  done < <(find "$LOCAL" -type f -links 1 -size +"${MIN_FILE_MIB}M" -mtime +"$MIN_AGE_DAYS" \
+  # -mmin, not -mtime: find's -mtime counts in whole days, so `-mtime +0` means
+  # "at least 24 hours" and ARCHIVE_MIN_AGE_DAYS=0 cannot express "no hold at
+  # all" - which is what 0 reads as, and what someone setting it to 0 wants. In
+  # minutes the arithmetic is exact and 0 means 0. Everything above a day behaves
+  # as before: +1 is 1440 minutes either way.
+  done < <(find "$LOCAL" -type f -links 1 -size +"${MIN_FILE_MIB}M" -mmin +"$(( MIN_AGE_DAYS * 1440 ))" \
              -printf '%T@\t%s\t%p\n' 2>/dev/null | sort -n)
   printf '%s' "$moved"
 }
