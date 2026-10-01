@@ -94,7 +94,7 @@ heal_seconds() {                  # HEAL_INTERVAL "2min" -> 120
 # actually happen. It is the difference between "act now" and "this sorts
 # itself out".
 reclaimable_gib() {
-  local root="${DATA_ROOT:-./data}/torrents" hours=${HEAL_ORPHAN_HOURS:-24} b
+  local root="${DATA_ROOT:-./data}/local/torrents" hours=${HEAL_ORPHAN_HOURS:-24} b
   [[ -d "$root" ]] || { echo 0; return 0; }
   [[ "$hours" =~ ^[0-9]+$ ]] || hours=24
   b=$(find "$root" -type f -links 1 -mmin "+$(( hours * 60 ))" -printf '%s\n' 2>/dev/null \
@@ -148,7 +148,7 @@ check_disk_space() {
   local state; state=$(cat "$DISK_STATE")
 
   local mounts m avail free_gib free_min=999999 below=0
-  mounts=$(df --output=target "${DATA_ROOT:-./data}/media" "${DATA_ROOT:-./data}/torrents" \
+  mounts=$(df --output=target "${DATA_ROOT:-./data}/local/media" "${DATA_ROOT:-./data}/local/torrents" \
            2>/dev/null | tail -n +2 | sort -u)
   [[ -n "$mounts" ]] || return 0
 
@@ -404,7 +404,7 @@ evict_superseded_torrents() {
   gratio=$(jq -r 'if .max_ratio_enabled then .max_ratio else -1 end' <<<"$prefs")
   gtime=$(jq -r 'if .max_seeding_time_enabled then .max_seeding_time else -1 end' <<<"$prefs")
 
-  local root="${DATA_ROOT:-./data}/torrents" keep=${HEAL_ORPHAN_KEEP:-prowlarr,music}
+  local root="${DATA_ROOT:-./data}/local/torrents" keep=${HEAL_ORPHAN_KEEP:-prowlarr,music}
   # Fields separated by the unit separator, not a tab: tab counts as IFS
   # whitespace, so `IFS=$'\t' read` collapses two adjacent tabs and an empty
   # category silently shifted the path into the wrong variable - every torrent
@@ -459,7 +459,7 @@ reclaim_orphaned_usenet() {
   local hours=${HEAL_ORPHAN_HOURS:-24}
   [[ "$hours" =~ ^[0-9]+$ ]] || return 0
   (( hours > 0 )) || return 0
-  local root="${DATA_ROOT:-./data}/usenet/complete"
+  local root="${DATA_ROOT:-./data}/local/usenet/complete"
   [[ -d "$root" ]] || return 0
 
   # Every path any app still expects to import, as seen inside the containers.
@@ -497,7 +497,7 @@ reclaim_orphaned_downloads() {
   local hours=${HEAL_ORPHAN_HOURS:-24}
   [[ "$hours" =~ ^[0-9]+$ ]] || { log "HEAL_ORPHAN_HOURS must be a whole number of hours (got \"$hours\")"; return 0; }
   (( hours > 0 )) || return 0
-  local root="${DATA_ROOT:-./data}/torrents"
+  local root="${DATA_ROOT:-./data}/local/torrents"
   [[ -d "$root" ]] || return 0
 
   # An import that may still be coming is not the moment to delete files from
