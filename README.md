@@ -1829,6 +1829,14 @@ unlimited. Only one binds: everything a run moves passes through rclone's cache 
 so the cap has to fit `RCLONE_CACHE_MAX` — half of it, since `--vfs-cache-max-age` is an hour and
 the timer fires hourly, so two runs can be resident. `mover.sh` clamps it if it is set higher.
 
+`RCLONE_CACHE_MAX` in turn has to fit under `DISK_FLOOR_GIB`, and the shipped values did not: a
+50 GiB cache against a 25 GiB floor means the brake stops every download at 25 GiB free and the
+cache then grows past it unopposed, because the cache is the one consumer the brake cannot stop.
+Half the floor is the rule, which makes the whole chain `per-run ≤ cache ÷ 2 ≤ floor ÷ 4`. If the
+disk is already tight, recreating the rclone container empties the cache outright — it lives in the
+container's writable layer, not under `DATA_ROOT` — but only do that once the uploads have drained,
+which `docker compose exec rclone rclone rc --rc-addr 127.0.0.1:5572 vfs/stats` will tell you.
+
 #### Three things a real move taught
 
 None of them readable off the code:

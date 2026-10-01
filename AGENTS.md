@@ -148,6 +148,17 @@ Each of these cost a debugging session, and none can be read off the code.
   internet access denied" while every check run on this host passes, because loopback is always
   local. Caddy does not hide the client - SABnzbd reads `X-Forwarded-For` and checks every hop.
   Test this one from the device that was refused.
+- **The disk brake cannot stop rclone's cache, which is the thing that fills the disk.**
+  `--vfs-cache-mode full` puts every archived file through the local cache on its way up, so a
+  mover run frees bytes from the library and spends them again on cache - and `df` only recovers
+  an hour later, when `--vfs-cache-max-age` expires them. `heal.sh` stops downloads at
+  `DISK_FLOOR_GIB` and the cache keeps growing past it, so `RCLONE_CACHE_MAX` has to be well
+  under the floor - half of it - and the whole chain is `ARCHIVE_MAX_GIB_PER_RUN <=
+  RCLONE_CACHE_MAX / 2 <= DISK_FLOOR_GIB / 4`. The shipped defaults had a 50G cache against a
+  25 GiB floor, which is the brake defending a line the cache walks straight through. The cache
+  lives in the rclone container's writable layer, not under `DATA_ROOT`, so recreating the
+  container empties it at once - the fast way out of a full disk, but only after `vfs/stats`
+  says the uploads have drained.
 - **Homepage polling qBittorrent with a stale login earns a one-hour IP ban** after five failures,
   which is why the login change stops Homepage before anything else runs.
 - Under `set -euo pipefail` a bare `return` after a failed test hands back that status and ends the
