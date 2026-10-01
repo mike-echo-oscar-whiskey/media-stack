@@ -1845,6 +1845,14 @@ unlimited. Only one binds: everything a run moves passes through rclone's cache 
 so the cap has to fit `RCLONE_CACHE_MAX` — half of it, since `--vfs-cache-max-age` is an hour and
 the timer fires hourly, so two runs can be resident. `mover.sh` clamps it if it is set higher.
 
+`scripts/archive-all.sh` is for the other case: a change that frees a large batch at once, where
+one capped pass an hour is days of trickling. It runs `mover.sh --now` in a loop until nothing is
+eligible, stops by itself if a pass moves nothing, and takes `--uncapped` to ignore
+`ARCHIVE_UPLOAD_WINDOW` for the duration — runtime only, so the cap returns on its own. It
+deliberately never recreates the rclone container between passes to flush the cache: mergerfs holds
+the branch open for as long as the union exists, so the mountpoint is never idle and the recreate
+leaves a dead FUSE endpoint only root can clear.
+
 `RCLONE_CACHE_MAX` in turn has to fit under `DISK_FLOOR_GIB`, and the shipped values did not: a
 50 GiB cache against a 25 GiB floor means the brake stops every download at 25 GiB free and the
 cache then grows past it unopposed, because the cache is the one consumer the brake cannot stop.
