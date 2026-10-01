@@ -137,6 +137,17 @@ Each of these cost a debugging session, and none can be read off the code.
   Convert to bytes and pass whole KiB. qBittorrent takes plain B/s and rounds to KiB, which
   costs 32 B/s on a 100 Mbit cap and is fine. Check a cap by reading it back in B/s, never by
   dividing by 1024² and calling the result Mbit.
+- **SABnzbd's `set_config` accepts a protected option and does nothing.** `inet_exposure`,
+  `api_warnings` and `local_ranges` carry `protect=True`, so `set_dict` drops them: the API
+  answers `{"status": true}`, the value never changes, and reading it back is the only way to
+  find out. They have to be written into `sabnzbd.ini`, and SABnzbd rewrites that file as it
+  shuts down - so stop the container, edit, start, rather than edit and restart.
+- **SABnzbd decides for itself whether a client is local, and the host can never see it fail.**
+  With `local_ranges` empty it asks Python whether the address is private, which excludes
+  Tailscale: `100.64.0.0/10` is shared address space, so a tailnet browser gets "External
+  internet access denied" while every check run on this host passes, because loopback is always
+  local. Caddy does not hide the client - SABnzbd reads `X-Forwarded-For` and checks every hop.
+  Test this one from the device that was refused.
 - **Homepage polling qBittorrent with a stale login earns a one-hour IP ban** after five failures,
   which is why the login change stops Homepage before anything else runs.
 - Under `set -euo pipefail` a bare `return` after a failed test hands back that status and ends the

@@ -24,8 +24,7 @@ configure_sabnzbd() {
   # sabnzbd.org/access-denied - which reads as a network fault and is not one.
   # Alone among the apps here it has that guard, so reaching it through Caddy at
   # sabnzbd.<SITE_DOMAIN> fails until the name is listed, even though this repo is
-  # what puts Caddy in front of it on that name. local_ranges is left alone:
-  # empty means SABnzbd works out the local networks itself.
+  # what puts Caddy in front of it on that name.
   local wl="sabnzbd,localhost,127.0.0.1"
   [[ -n "${SITE_DOMAIN:-}" ]] && wl="$wl,sabnzbd.$SITE_DOMAIN"
   [[ -n "${LAN_IP:-}" ]] && wl="$wl,$LAN_IP"
@@ -37,6 +36,35 @@ configure_sabnzbd() {
   else
     sab_set host_whitelist "$wl"
     ok "host whitelist: $wl"
+  fi
+
+  # Whose request counts as local. With local_ranges empty SABnzbd asks Python
+  # whether the address is private, and a Tailscale address is not: 100.64.0.0/10
+  # is shared address space, so is_private answers False and every tailnet
+  # browser gets the same access-denied page as a stranger. Caddy does not hide
+  # it either - it forwards the client in X-Forwarded-For and SABnzbd checks
+  # every hop. Spelling the ranges out restores the private networks and adds
+  # the tailnet. local_ranges carries protect=True, which makes set_config a
+  # silent no-op, so it has to go into the ini - and SABnzbd rewrites that file
+  # as it shuts down, hence stop, edit, start rather than edit and restart.
+  local ranges=${SAB_LOCAL_RANGES:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,::1/128,fc00::/7}
+  local ranges_now
+  ranges_now=$(sab mode=get_config section=misc keyword=local_ranges \
+               | jq -r '[.config.misc.local_ranges] | flatten | join(",")' | tr -d ' ')
+  if [[ "$ranges_now" == "${ranges// /}" ]]; then
+    skip "local ranges"
+  else
+    local ini="$CONFIG_ROOT/sabnzbd/sabnzbd.ini"
+    docker compose stop sabnzbd >/dev/null 2>&1
+    if grep -q '^local_ranges *=' "$ini"; then
+      sed -i "s|^local_ranges *=.*|local_ranges = ${ranges//,/, }|" "$ini"
+    else
+      sed -i "/^\[misc\]/a local_ranges = ${ranges//,/, }" "$ini"
+    fi
+    docker compose start sabnzbd >/dev/null 2>&1
+    local i
+    for i in $(seq 1 40); do sab mode=version >/dev/null 2>&1 && break; sleep 3; done
+    ok "local ranges: $ranges"
   fi
 
   local cat

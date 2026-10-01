@@ -414,6 +414,19 @@ Two things outside this repo make the names work:
    names), for qBittorrent it must **not** (its CSRF check compares `Host` with the browser's
    `Origin`). Any other proxy (Traefik, Nginx Proxy Manager) works the same way.
 
+SABnzbd has a second guard behind that one, and it is the one that looks like a network
+fault. Besides the host name it also judges the *client's* address, and refuses anything it
+does not call local with a bare page reading "External internet access denied" that links to
+`sabnzbd.org/access-denied`. Left to itself it trusts whatever Python calls a private address,
+which leaves Tailscale out — `100.64.0.0/10` is shared address space, not private — so the
+stack reaches you from the LAN and refuses you over the tailnet. Caddy does not stand in for
+the client either: it forwards the real address in `X-Forwarded-For` and SABnzbd checks every
+hop. `SAB_LOCAL_RANGES` in `.env` spells the ranges out, defaulting to the private networks
+plus the tailnet, and `configure.sh` writes it into `sabnzbd.ini` — the API silently ignores
+that setting, and SABnzbd rewrites the file as it stops, so the step stops the container,
+edits, and starts it again. Nothing on this host can detect the fault, since a request from
+the host is always local: test it from the device that was refused.
+
 Plain HTTP by design: private names cannot get public certificates, and the LAN/VPN is the
 trust boundary. For HTTPS, use Caddy's internal CA (trust it once per device) or a domain you
 own with a DNS-01 wildcard certificate.
