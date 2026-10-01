@@ -197,6 +197,21 @@ check_disk_space() {
           "Inside the $stop_at GiB brake point ($floor GiB floor plus $head_gib GiB of headroom). Stopped ${n:-0} downloading torrent(s); usenet pauses itself." disk
       fi
       log "disk: brake engaged at $free_min GiB, stopped ${n:-0} downloading torrent(s)"
+    elif (( below )) && [[ $engaged == true ]]; then
+      # Engaging once is not enough. The brake stops what is running at that
+      # instant, and an arr app goes on grabbing: a release that arrives a minute
+      # later starts downloading against a disk that is already past its floor,
+      # and the brake - being "on" - never looks again. Three such grabs pulled
+      # 22 MiB/s for an hour while the state file said engaged, and took the disk
+      # from 53 GiB to 24. So keep stopping, and remember the hashes too, or they
+      # are not among the ones started again on release.
+      stopped=$(qbt_stop_downloading)
+      n=$(printf '%s' "$stopped" | grep -c . || true)
+      if (( ${n:-0} > 0 )); then
+        state=$(jq -c --argjson h "$(printf '%s' "$stopped" | jq -R -s 'split("\n") | map(select(length > 0))')" \
+                '.braked.hashes = ((.braked.hashes // []) + $h | unique)' <<<"$state")
+        log "disk: brake still on at $free_min GiB, stopped $n download(s) started since"
+      fi
     elif (( ! below )) && [[ $engaged == true ]] && (( free_min >= stop_at + stop_at / 4 )); then
       mapfile -t held < <(jq -r '.braked.hashes[]? // empty' <<<"$state")
       qbt_start ${held[@]+"${held[@]}"}

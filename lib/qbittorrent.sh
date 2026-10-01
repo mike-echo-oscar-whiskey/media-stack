@@ -57,11 +57,24 @@ configure_qbittorrent() {
   # rate is decimal (1 Mbit/s = 125000 B/s) and 100 Mbit/s is 12207.03 KiB, so
   # it stored 32 B/s short. To convert: KiB = Mbit x 125000 / 1024, or roughly
   # Mbit x 122.07.
-  local ratio=${TORRENT_SEED_RATIO:-0} days=${TORRENT_SEED_DAYS:-0} kib=${TORRENT_MAX_KIB:-0} upkib=${TORRENT_UPLOAD_MAX_KIB:-0}
+  # Seeding limits for PUBLIC trackers only. A private tracker's torrent carries
+  # its own limit, stamped from TORRENT_PRIVATE_SEED_HOURS when Sonarr or Radarr
+  # grabbed it (configure_seed_criteria in lib/prowlarr.sh), and that overrides
+  # these - so nothing here can make a private torrent leave early.
+  #
+  # Empty is unlimited; **0 means stop the moment the download completes**. The
+  # two used to share one value, with 0 meaning unlimited, and then there was no
+  # way to say "do not seed at all" - which is what a public tracker wants here.
+  # Seeding costs a hardlink: a torrent still holding the file keeps the library
+  # copy at two links, and the mover only archives files with one, so a torrent
+  # that never finishes seeding makes its title unarchivable for as long as it
+  # lives. With 87 of them queued behind max_active_uploads and a median ratio of
+  # 0.002, that was 197 GiB the archive tier could not touch.
+  local ratio=${TORRENT_SEED_RATIO:-} days=${TORRENT_SEED_DAYS:-} kib=${TORRENT_MAX_KIB:-0} upkib=${TORRENT_UPLOAD_MAX_KIB:-0}
   # These go straight into shell arithmetic and into jq, where a typo would
   # end the run with an arithmetic or parse error instead of a clear message.
-  [[ "$ratio"  =~ ^[0-9]+([.][0-9]+)?$ ]] || die "TORRENT_SEED_RATIO must be a number (got \"$ratio\")"
-  [[ "$days"   =~ ^[0-9]+$ ]] || die "TORRENT_SEED_DAYS must be a whole number of days (got \"$days\")"
+  [[ -z "$ratio" || "$ratio" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "TORRENT_SEED_RATIO must be a number, 0 to stop at once, or empty for unlimited (got \"$ratio\")"
+  [[ -z "$days"  || "$days"  =~ ^[0-9]+$ ]] || die "TORRENT_SEED_DAYS must be a whole number of days, 0 to stop at once, or empty for unlimited (got \"$days\")"
   [[ "$kib"   =~ ^[0-9]+$ ]] || die "TORRENT_MAX_KIB must be a whole number of KiB/s (got \"$kib\")"
   [[ "$upkib" =~ ^[0-9]+$ ]] || die "TORRENT_UPLOAD_MAX_KIB must be a whole number of KiB/s (got \"$upkib\")"
   # The unrestricted window is qBittorrent's alternative-limit schedule with
@@ -88,7 +101,7 @@ configure_qbittorrent() {
   local maxall=${TORRENT_MAX_ACTIVE_TOTAL:-20}
   curl -fsS -b "$jar" "$QBT_URL/api/v2/app/setPreferences" --data-urlencode "json=$(jq -cn \
       --argjson maxdl "$maxdl" --argjson maxup "$maxup" --argjson maxall "$maxall" \
-      --argjson ratio "$ratio" --argjson minutes "$(( days * 1440 ))" \
+      --argjson ratio "${ratio:-null}" --argjson minutes "$(if [[ -n "$days" ]]; then echo $(( days * 1440 )); else echo null; fi)" \
       --argjson dl "$(( kib * 1024 ))" --argjson up "$(( upkib * 1024 ))" --argjson sched "$sched" '{
       save_path: "/data/torrents",
       dl_limit: $dl, up_limit: $up,
@@ -96,8 +109,8 @@ configure_qbittorrent() {
       incomplete_files_ext: true,
       upnp: false, random_port: false,
       bypass_local_auth: true,
-      max_ratio_enabled: ($ratio > 0), max_ratio: (if $ratio > 0 then $ratio else -1 end),
-      max_seeding_time_enabled: ($minutes > 0), max_seeding_time: (if $minutes > 0 then $minutes else -1 end),
+      max_ratio_enabled: ($ratio != null), max_ratio: (if $ratio != null then $ratio else -1 end),
+      max_seeding_time_enabled: ($minutes != null), max_seeding_time: (if $minutes != null then $minutes else -1 end),
       max_ratio_act: 0,
       queueing_enabled: true,
       max_active_downloads: $maxdl, max_active_uploads: $maxup, max_active_torrents: $maxall }
@@ -109,17 +122,34 @@ configure_qbittorrent() {
   (( kib   > 0 )) && dltxt="$kib KiB/s ($(( (kib * 1024 * 8 + 500000) / 1000000 )) Mbit/s)"
   (( upkib > 0 )) && uptxt="$upkib KiB/s ($(( (upkib * 1024 * 8 + 500000) / 1000000 )) Mbit/s)"
   ok "download $dltxt, upload $uptxt, unrestricted ${UNRESTRICTED_HOURS:-never}"
-  local span="${days} days"
-  if (( days == 1 )); then span="24 hours"; fi
-  ok "seeding stops (pause) at ratio ${ratio} or after ${span}; Sonarr/Radarr then remove the torrent"
+  local seedtxt
+  if [[ -z "$ratio" && -z "$days" ]]; then
+    seedtxt="public torrents seed with no limit"
+  elif [[ "$ratio" == 0 || "$days" == 0 ]]; then
+    seedtxt="public torrents stop seeding as soon as they complete"
+  else
+    local span
+    if [[ -z "$days" ]]; then span="no time limit"
+    elif (( days == 1 )); then span="24 hours"
+    else span="${days} days"; fi
+    seedtxt="public torrents stop (pause) at ratio ${ratio:-none} or after ${span}"
+  fi
+  ok "$seedtxt; Sonarr/Radarr then remove the torrent, which unpins the library copy"
+  ok "private trackers keep their own ${TORRENT_PRIVATE_SEED_HOURS:-72}h, stamped per torrent at grab time"
 
   # A torrent can carry its own share limit, set when it was added; it then
   # ignores the two values above. .env is the single source of truth, so put
   # such a torrent back on the global limit. shareLimitAction is a required
   # parameter from qBittorrent 5.1 on.
-  local stamped
+  # Except a private tracker's torrent, which carries its own seeding time on
+  # purpose. heal.sh's enforce_share_limits has always skipped those; this copy
+  # did not, so a configure.sh run would quietly strip the very limit that keeps
+  # a private tracker from counting it as a hit and run.
+  local stamped private_minutes=$(( ${TORRENT_PRIVATE_SEED_HOURS:-72} * 60 ))
   stamped=$(curl -fsS -b "$jar" "$QBT_URL/api/v2/torrents/info" \
-            | jq -r '.[] | select(.ratio_limit != -2 or .seeding_time_limit != -2) | .hash')
+            | jq -r --argjson p "$private_minutes" '.[]
+                | select(.ratio_limit != -2 or .seeding_time_limit != -2)
+                | select(.seeding_time_limit != $p) | .hash')
   if [[ -n "$stamped" ]]; then
     curl -fsS -b "$jar" -X POST "$QBT_URL/api/v2/torrents/setShareLimits" \
       --data-urlencode "hashes=$(tr '\n' '|' <<<"$stamped")" --data-urlencode "ratioLimit=-2" \
