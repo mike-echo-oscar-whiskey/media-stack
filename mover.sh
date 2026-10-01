@@ -2,6 +2,7 @@
 # Moves titles from the local library to the archive tier when the disk fills:
 #
 #   ./mover.sh             archive the oldest titles until there is room again
+#   ./mover.sh --now       the same, but do not wait for the quiet window
 #   ./mover.sh install     systemd user timer, hourly
 #   ./mover.sh status      last result, next run
 #
@@ -293,7 +294,11 @@ mover() {
   # quiet window, where the line is uncapped anyway - except below
   # DISK_FLOOR_GIB, where downloading has already stopped and a full disk is a
   # worse problem than a slow evening.
-  if (( free > floor )) && ! in_quiet_window; then
+  # --now is for clearing a backlog by hand: the hold below is about being a
+  # good neighbour on the uplink, not about safety, and there is no way to ask
+  # for "archive it all, I am watching it" without it. The timer never passes
+  # it, so unattended runs still wait for the window.
+  if (( ! FORCE )) && (( free > floor )) && ! in_quiet_window; then
     # Name the reason it wants to run, not the one it used to: with a share
     # policy the disk can be nowhere near the warn mark and there is still work.
     local why
@@ -375,9 +380,11 @@ show_status() {
   journalctl --user -u "$UNIT" --since '30 days ago' --no-pager -o cat 2>/dev/null | grep -E 'archiving|archived' || echo "nothing"
 }
 
+FORCE=0
 case "${1:-}" in
   "")       mover ;;
+  --now)    FORCE=1; mover ;;
   install)  install_timer ;;
   status)   show_status ;;
-  *) echo "usage: $0 [install|status]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--now|install|status]" >&2; exit 2 ;;
 esac
