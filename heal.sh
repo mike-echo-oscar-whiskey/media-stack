@@ -359,8 +359,15 @@ evict_stalled_metadata() {
   local raw stuck h app name port v key ids removed=0
   raw=$(docker compose exec -T qbittorrent curl -fsS -m 10 http://localhost:8081/api/v2/torrents/info 2>/dev/null) || return 0
   jq -e 'type == "array"' >/dev/null 2>&1 <<<"$raw" || return 0
+  # time_active, not "now - added_on": the latter is wall clock since the torrent
+  # was added, and a magnet that sat stopped for four hours under the disk brake
+  # is older than the limit the instant it resumes - condemned before it has had
+  # a second to find a peer. That is this stack evicting its own downloads for a
+  # stall it caused: the brake released at 17:29 and the evictions logged at
+  # 17:29:24. time_active counts only the time the torrent was actually running,
+  # so a magnet added 329 minutes ago but active for one is judged on the one.
   stuck=$(jq -r --argjson age "$(( mins * 60 ))" \
-            '.[] | select(.state == "metaDL" and (now - .added_on) > $age) | .hash | ascii_downcase' <<<"$raw")
+            '.[] | select(.state == "metaDL" and (.time_active // 0) > $age) | .hash | ascii_downcase' <<<"$raw")
   [[ -n "$stuck" ]] || return 0
 
   while IFS= read -r h; do

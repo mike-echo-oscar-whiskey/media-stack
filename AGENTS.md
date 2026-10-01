@@ -148,6 +148,16 @@ Each of these cost a debugging session, and none can be read off the code.
   internet access denied" while every check run on this host passes, because loopback is always
   local. Caddy does not hide the client - SABnzbd reads `X-Forwarded-For` and checks every hop.
   Test this one from the device that was refused.
+- **A watchdog timing something by wall clock punishes whatever the stack itself
+  paused.** `evict_stalled_metadata` blocklisted a magnet when `now - added_on`
+  passed `HEAL_METADATA_STALL_MINUTES`, which is time since it was *added*, not
+  time spent trying. The disk brake stops torrents for hours, so every stopped
+  magnet was already over the limit the instant it resumed - five releases were
+  blocklisted within a second of the brake releasing, none of them faulty. qBittorrent's
+  `time_active` counts only the time a torrent was actually running, and is the
+  field to judge on: one magnet read 329 minutes since it was added against one
+  minute active. Before trusting any age test in heal.sh, ask what the stack does
+  to that clock while it is braked, queued, or waiting on the quiet window.
 - **Renaming on import destroys the only evidence of what a release was.** An audio-description
   release announces itself in the release *title* - "Rick and Morty S01E01 Pilot with Audio
   Description 1080p AMZN...-Kitsune" - and the file is then renamed to the naming format, which
