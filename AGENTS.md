@@ -193,17 +193,22 @@ Each of these cost a debugging session, and none can be read off the code.
   RCLONE_CACHE_MAX / 2 <= DISK_FLOOR_GIB / 4`. The shipped defaults had a 50G cache against a
   25 GiB floor, which is the brake defending a line the cache walks straight through. The cache
   lives in the rclone container's writable layer, not under `DATA_ROOT`, so recreating the
-  container empties it at once - the fast way out of a full disk, but only after `vfs/stats`
-  says the uploads have drained.
-- **Recreating the rclone container is only safe between mover passes.** The cache-flush trick
-  above is not safe at any moment: do it while the mountpoint is in use and the container dies
-  with the mount still held, leaving a dead FUSE endpoint - listed in `/proc/mounts`, answering
-  `Transport endpoint is not connected`, invisible to `mountpoint -q`, and refusing every attempt
-  by the new container with `failed to access mountpoint ... Socket not connected`. rclone then
-  restart-loops while the whole archive tier reads as missing. `fusermount3 -u` cannot clear it
-  ("not found in /etc/mtab") and the mount is root-owned, so recovery is `sudo umount -l <path>`
-  and nothing the stack can do for itself. The archive loop recreates between passes for exactly
-  this reason; an out-of-band recreate from another shell is what broke it.
+  container empties it at once - but see the next entry: that is not a safe thing to do while the
+  union is assembled, so treat the cache as self-managing and let the max-size and max-age limits
+  reclaim it.
+- **Never recreate the rclone container while the union is assembled.** Doing it leaves a dead
+  FUSE endpoint - listed in `/proc/mounts`, answering `Transport endpoint is not connected`,
+  invisible to `mountpoint -q` - and the replacement container restart-loops on `failed to access
+  mountpoint ... Socket not connected` while the whole archive tier reads as missing.
+  `fusermount3 -u` cannot clear it ("not found in /etc/mtab") and the mount is root-owned, so
+  recovery is `sudo umount -l <path>`: nothing the stack can do for itself.
+
+  The first version of this entry said it was safe "between mover passes". It is not, and the
+  correction cost a second outage. `fuser -m data/archive` lists dozens of holders, mergerfs among
+  them, because the union keeps the branch open for as long as it exists - so the mountpoint is
+  **never** idle and there is no quiet moment to recreate in. Stop the union first or do not
+  recreate at all. Reclaiming the VFS cache is not a reason to: `--vfs-cache-max-size` and
+  `--vfs-cache-max-age` already do it.
 - **`RenameFiles` with an empty `files` list succeeds and renames nothing.** The command takes the
   parent id *and* the file ids; `{name, seriesId, files: []}` is accepted, reports success, and is
   a no-op. The ids come from the same `/api/v3/rename` response that said the names were stale -
