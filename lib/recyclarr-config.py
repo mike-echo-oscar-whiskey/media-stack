@@ -182,6 +182,13 @@ EXTRA_GROUPS = {
     # rebuild it by hand in lib/profiles.sh for want of a template that asks for
     # it. The rest of the group is German and French profiles that do not apply.
     "optional-language-profiles": {"Language: Not Original"},
+    # One member. MULTi says a release carries several audio tracks without
+    # saying which, so the guides never score it alone - they AND it with a
+    # language check. lib/profiles.sh scores it the same as the dub, on the
+    # reasoning that a full-disc rip is often the only way a dubbed version is
+    # offered at all, and that scoring it *above* the dub would trade a release
+    # that names the language for one that merely might carry it.
+    "optional-miscellaneous": {"MULTi"},
 }
 
 for group_file, wanted in EXTRA_GROUPS.items():

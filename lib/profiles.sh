@@ -246,8 +246,22 @@ dub_formats() {                   # dub_formats URL
   audio=$(cf_language "$lang Audio" "$ids")
   regex=$(dub_title_regex "$DUB_CODE")
   if [[ -n "$regex" ]]; then title=$(cf_title "$lang Dub (title)" "$regex"); fi
-  DUB_IDS=$(jq -cn --argjson a "$audio" --arg t "${title:-}" \
-    '[$a] + (if $t == "" then [] else [($t|tonumber)] end)')
+  # MULTi scores the same as the dub it stands in for, never more. A full-disc
+  # rip keeps every track the disc carried, so MULTi is often the only way a
+  # dubbed version is offered at all - the explicit tags reach perhaps a third
+  # of what exists. But the tag says there are several tracks, not which: the
+  # guides never score it alone, they AND it with a language check, and the one
+  # place they use it is French. Scored above the dub it would trade a release
+  # that *names* the language for one that merely might carry it; scored equal
+  # it wins nothing it should not, and the quality and release-group tiers
+  # decide between two candidates that both claim to be multi-language. Equal
+  # scores also mean neither can displace the other later, since an upgrade
+  # needs a difference and there is none.
+  local multi
+  multi=$(jq -r --arg n "MULTi" 'first(.[] | select(.name == $n)) | .id // empty' <<<"$CF_FMT")
+  DUB_IDS=$(jq -cn --argjson a "$audio" --arg t "${title:-}" --arg m "${multi:-}" \
+    '[$a] + (if $t == "" then [] else [($t|tonumber)] end)
+          + (if $m == "" then [] else [($m|tonumber)] end)')
 }
 
 # Only the three scores. The quality merge is written into Recyclarr's own

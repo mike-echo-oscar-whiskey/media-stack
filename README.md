@@ -1153,6 +1153,16 @@ below are this stack's own and everything after them is the guides':
   group's formats are all optional, so `lib/recyclarr-config.py` has to name them in `select`;
   adding the group alone syncs nothing. Note what this does **not** refuse: a release carrying a
   descriptive track *beside* a normal one is a choice, not a defect, and only its score suffers;
+- the guides' **MULTi** at the same **+500**, never more. A full-disc rip keeps every track the
+  disc carried, so MULTi is often the only way a dubbed version is offered at all — the explicit
+  tags reach a fraction of what exists, and without this *Shrek* has no reachable candidate while
+  *Monsters, Inc.* does. But the tag says there are several tracks, not which: the guides never
+  score it alone, they AND it with a language check, and the one place they use it is French.
+  Scored above the dub it would trade a release that *names* the language for one that merely
+  might carry it; scored equal it wins nothing it should not, the release-group tiers decide
+  between two multi-language candidates, and neither can displace the other later because an
+  upgrade needs a difference and there is none. Its regex excludes `Multi-Subs`, which is
+  subtitles rather than audio;
 - the two dub formats at **+500**, with `minFormatScore` left at the guides' `0`. A preference,
   never a requirement: a film with no dub available downloads exactly as it would without this
   section, instead of sitting in the wanted list forever;
