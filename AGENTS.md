@@ -196,9 +196,15 @@ Each of these cost a debugging session, and none can be read off the code.
   RCLONE_CACHE_MAX / 2 <= DISK_FLOOR_GIB / 4`. The shipped defaults had a 50G cache against a
   25 GiB floor, which is the brake defending a line the cache walks straight through. The cache
   lives in the rclone container's writable layer, not under `DATA_ROOT`, so recreating the
-  container empties it at once - but see the next entry: that is not a safe thing to do while the
-  union is assembled, so treat the cache as self-managing and let the max-size and max-age limits
-  reclaim it.
+  container empties it at once - and emptying it can destroy files, which is the reason not to,
+  ahead of the dead FUSE endpoint in the next entry. `--vfs-cache-mode full` acknowledges a write
+  the moment it reaches the cache, so `mover.sh` sees the copy succeed and deletes the local source
+  while the upload is still queued: a file whose upload has not completed exists in exactly one
+  place, that cache. Four did on 2026-10-02 - two Rick and Morty episodes, *Hellfire* and *Ip Man
+  Kung Fu Legend*, 21 GiB in all - readable through the union, `hasFile=true` in Radarr, absent
+  from Drive and absent from `data/local`. Treat the cache as self-managing and let the max-size
+  and max-age limits reclaim it; before any recreate, check what is pending upload and whether it
+  exists anywhere else. `scripts/rclone-recreate.sh` does that check and refuses.
 - **Never recreate the rclone container while the union is assembled.** Doing it leaves a dead
   FUSE endpoint - listed in `/proc/mounts`, answering `Transport endpoint is not connected`,
   invisible to `mountpoint -q` - and the replacement container restart-loops on `failed to access

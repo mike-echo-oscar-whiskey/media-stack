@@ -570,6 +570,11 @@ services:
     # space freed, and "docker compose exec" is how it gets in.
     # --dir-cache-time is long because Drive supports change polling; without
     # that it would be an hour of stale listings rather than a cheap one.
+    # command: is a folded scalar, so every line in it becomes part of the
+    # argument string - a # inside it is a literal argument, not a comment.
+    # The rc authenticates because it binds 0.0.0.0 and is therefore reachable
+    # to every container on the media network, and it can issue core/quit and
+    # vfs operations. The credentials are the ones the Homepage tile sends.
     command: >
       mount media: /data/archive/media
       --allow-other
@@ -584,9 +589,6 @@ services:
       --vfs-cache-max-age 1h
       --rc
       --rc-addr 0.0.0.0:5572
-      # The rc is reachable to every container on the media network, and it can
-      # issue core/quit and vfs operations - so it authenticates. These are the
-      # same credentials the Homepage tile sends, which is the only client.
       --rc-user ${WEBUI_USERNAME}
       --rc-pass ${WEBUI_PASSWORD}
       --bwlimit "${ARCHIVE_UPLOAD_WINDOW}"

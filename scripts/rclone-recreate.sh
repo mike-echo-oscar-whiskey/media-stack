@@ -29,25 +29,108 @@ if (( ! DRY )) && [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-say "0. refuse to run while the mover is mid-copy"
+say "0. refuse if anything would be lost"
+# The cache is in the container's writable layer, so a recreate empties it. With
+# --vfs-cache-mode full a write is acknowledged as soon as it reaches the cache,
+# so mover.sh sees success and deletes the local source while the upload is still
+# queued. A file whose upload has not completed therefore exists in exactly one
+# place: this cache. Recreating the container deletes it. That is the stake here -
+# not a half-copied file.
+#
 # Two ways the mover can be running: its timer, or someone invoking it by hand
-# with --now. The bracket keeps pgrep from matching its own command line, which
-# would make this test unable to ever return false.
-if systemctl --user --machine="$OWNER@" is-active media-stack-mover.service >/dev/null 2>&1 \
-   || pgrep -f 'move[r]\.sh' >/dev/null 2>&1; then
-  echo "   the mover is RUNNING - a bounce now could leave a half-copied file."
-  echo "   Wait for it to finish and run this again."
+# with --now. The bracket keeps pgrep from matching its own command line - and
+# note the plain name must not appear anywhere else in this command either, or
+# the bracket is defeated and the test can never return false.
+mover_running() {
+  systemctl --user --machine="$OWNER@" is-active media-stack-mover.service >/dev/null 2>&1 && return 0
+  # Exclude our own process tree: if this script is invoked from a command line
+  # that happens to contain the pattern, pgrep matches the invoker and the test
+  # can never return false. Walk up from $$ and ignore anything in that chain.
+  local mine=() p=$$ hit
+  while [[ -n "$p" && "$p" != 1 ]]; do mine+=("$p"); p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' '); done
+  while read -r hit; do
+    [[ -z "$hit" ]] && continue
+    local skip=0 m
+    for m in "${mine[@]}"; do [[ "$hit" == "$m" ]] && skip=1; done
+    (( skip )) || return 0
+  done < <(pgrep -f 'move[r]\.sh' 2>/dev/null)
+  return 1
+}
+if mover_running; then
+  echo "   the mover is RUNNING - it may be mid-copy. Wait for it and run this again."
   exit 1
 fi
-# rclone still writing is the same hazard, by a different route.
-q=$(runuser -u "$OWNER" -- docker compose exec -T rclone sh -c \
-      'rclone rc --rc-addr 127.0.0.1:5572 core/stats 2>/dev/null' 2>/dev/null \
-    | jq -r '(.transferring // []) | length' 2>/dev/null)
-if [[ -n "${q:-}" && "$q" != 0 ]]; then
-  echo "   rclone is uploading $q file(s) - wait for them to finish."
+
+# runuser needs root. When this is a --dry-run as the owner, call docker directly
+# instead, or the check silently fails and "cannot tell" reads as "nothing".
+asowner() { if [[ $EUID -eq 0 ]]; then runuser -u "$OWNER" -- "$@"; else "$@"; fi; }
+
+stats=$(asowner docker compose exec -T rclone sh -c \
+          'rclone rc --rc-addr 127.0.0.1:5572 core/stats 2>/dev/null' </dev/null 2>/dev/null)
+if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$stats"; then
+  echo "   REFUSING: could not read rclone's transfer state."
+  echo "   An empty answer is not a negative one - this might mean nothing is pending,"
+  echo "   or it might mean the rc is unreachable while nine files sit unuploaded."
+  echo "   Fix the check before trusting it:"
+  echo "     docker compose exec -T rclone rclone rc --rc-addr 127.0.0.1:5572 core/stats"
   exit 1
 fi
-echo "   mover idle, no uploads in flight"
+pending=$(jq -r '(.transferring // [])[]? | .name' <<<"$stats" 2>/dev/null)
+npend=$(printf '%s' "$pending" | grep -c . || true)
+
+# core/stats only lists what is being transferred now. The cache can hold more
+# that is merely queued, so enumerate the cache itself as well.
+cached=$(asowner docker compose exec -T rclone sh -c \
+           'find /root/.cache/rclone/vfs -type f 2>/dev/null' </dev/null 2>/dev/null \
+         | sed 's|^/root/.cache/rclone/vfs/media/||')
+ncache=$(printf '%s' "$cached" | grep -c . || true)
+echo "   rclone cache holds $ncache file(s); $npend transferring"
+pending=$(printf '%s\n%s' "$pending" "$cached" | grep -v '^$' | sort -u)
+npend=$(printf '%s' "$pending" | grep -c . || true)
+
+if (( npend == 0 )); then
+  echo "   nothing in the cache - safe to proceed"
+else
+  speed=$(jq -r '((.speed // 0) / 125000) | floor' <<<"$stats" 2>/dev/null)
+  err=$(jq -r '(.lastError // "none")' <<<"$stats" 2>/dev/null)
+  echo "   $npend file(s) pending upload, current speed ${speed:-0} Mbit/s"
+  echo "   last error: ${err:0:100}"
+  echo
+  echo "   checking whether any of them exists ONLY in the cache:"
+  atrisk=0
+  while IFS= read -r rel; do
+    [[ -z "$rel" ]] && continue
+    base=${rel##*/}; dir=${rel%/*}
+    on_drive=$(asowner docker compose exec -T rclone sh -c \
+                 "rclone lsf --no-traverse \"media:$dir\" 2>/dev/null" </dev/null 2>/dev/null \
+               | grep -cF -- "$base" || true)
+    local_copy=no
+    [[ -f "$ROOT/data/local/media/$rel" ]] && local_copy=yes
+    if [[ "${on_drive:-0}" == 0 && "$local_copy" == no ]]; then
+      echo "     CACHE-ONLY  $base"
+      atrisk=$(( atrisk + 1 ))
+    else
+      echo "     safe (drive=${on_drive:-0} local=$local_copy)  $base"
+    fi
+  done <<<"$pending"
+
+  if (( atrisk > 0 )); then
+    echo
+    echo "   REFUSING: $atrisk file(s) exist only in the cache this recreate would delete."
+    echo "   They are not on Drive and not on the local branch."
+    echo
+    if [[ "$err" == *rateLimit* || "$err" == *403* || "$err" == *quota* ]]; then
+      echo "   The uploads are blocked by the provider, not merely slow:"
+      echo "     $err"
+      echo "   Waiting will not clear it until the daily allowance resets."
+    fi
+    echo "   Copy them somewhere outside data/local and data/archive first, or wait"
+    echo "   until the log shows a Copied line for each, then run this again."
+    echo "   Override only if you accept losing them:  FORCE_LOSE_CACHE=1 $0"
+    [[ "${FORCE_LOSE_CACHE:-0}" == 1 ]] || exit 1
+    echo "   FORCE_LOSE_CACHE=1 set - continuing, those files will be lost."
+  fi
+fi
 
 say "1. what will change"
 echo "   --rc-addr          127.0.0.1:5572  ->  0.0.0.0:5572   (so Homepage can read it)"
