@@ -583,53 +583,72 @@ YAML
         # rclone's rc has no per-direction figure at all, and its speed field is
         # a lifetime average of both directions combined.
         showStats: true
-        widget:
-          type: customapi
-          url: http://rclone:5572/core/stats
-          method: POST
-          username: $(yq "$WEBUI_USERNAME")
-          password: $(yq "$WEBUI_PASSWORD")
-          refreshInterval: 10000
-          mappings:
-            # No speed field here. core/stats.speed is bytes/elapsedTime over the
-            # whole process life and counts both directions, so it cannot answer
-            # "how fast, which way, right now": labelled "uploading" it read
-            # 57 MB/s while the true upload count was zero and every byte was
-            # Bazarr pulling episodes down off Drive. The current rates come from
-            # showStats below, which reads the container's own rx/tx counters.
-            - field: transfers
-              label: files
-              format: number
-            - field: bytes
-              label: moved
-              format: bytes
-            - field: errors
-              label: failed
-              format: number
-            # Homepage's remap matches whole values only - no substrings, no
-            # conditions - so this depends on the provider's message being
-            # byte-stable. Google's daily-allowance refusal is, and it is the one
-            # failure that stops the archive tier dead: rclone retries the same
-            # files every twenty minutes for ever while the tile would otherwise
-            # read a healthy-looking speed, sampled mid-retry.
-            #
-            # It only lights up once the *mount* has tried an upload and failed.
-            # A standalone "rclone copy" keeps its own counters, and these reset
-            # when the container restarts, so an empty value means "nothing has
-            # been attempted", never "all is well".
-            - field: lastError
-              label: status
-              format: text
-              remap:
-                - value: "googleapi: Error 403: User rate limit exceeded., userRateLimitExceeded"
-                  to: RATE LIMITED
-                # Not "ok": an empty lastError means nothing has been tried,
-                # which is also what it reads after every container restart.
-                # "cannot tell" must not share a branch with "all is well".
-                - value: ""
-                  to: idle
-                - any: true
-                  to: error
+        # Two widgets because the two numbers that matter live on different rc
+        # endpoints, and neither alone answers the question the tile exists for:
+        # is the archive moving, and how fast. core/stats has no instantaneous
+        # aggregate - its speed field is bytes/elapsedTime over the whole process
+        # life, counting both directions - so the rate comes from the one file
+        # being transferred, and the backlog from the VFS cache.
+        widgets:
+          - type: customapi
+            url: http://rclone:5572/vfs/stats
+            method: POST
+            username: $(yq "$WEBUI_USERNAME")
+            password: $(yq "$WEBUI_PASSWORD")
+            refreshInterval: 10000
+            mappings:
+              # The real state of the archive tier. Non-zero and not falling means
+              # uploads are not draining, which is what a provider refusing them
+              # looks like from the inside - and unlike an error count it survives
+              # nothing and lies about nothing.
+              - field: diskCache.uploadsQueued
+                label: to upload
+                format: number
+              - field: diskCache.files
+                label: cached
+                format: number
+          - type: customapi
+            url: http://rclone:5572/core/stats
+            method: POST
+            username: $(yq "$WEBUI_USERNAME")
+            password: $(yq "$WEBUI_PASSWORD")
+            refreshInterval: 10000
+            mappings:
+              # The current file's rate. Homepage resolves field paths with lodash,
+              # so the array index works; it is empty when nothing is moving, hence
+              # the default. This is a genuine now-figure, where core/stats.speed
+              # is an average over hours and read 57 MB/s while nothing uploaded.
+              - field: transferring.0.speed
+                label: now
+                format: bytes
+                suffix: /s
+                defaultValue: 0
+              - field: errors
+                label: failed
+                format: number
+              # Homepage's remap matches whole values only - no substrings, no
+              # conditions - so this depends on the provider's message being
+              # byte-stable. Google's daily-allowance refusal is, and it is the one
+              # failure that stops the archive tier dead: rclone retries the same
+              # files every twenty minutes for ever.
+              #
+              # It only lights up once the *mount* has tried an upload and failed.
+              # A standalone "rclone copy" keeps its own counters, and these reset
+              # when the container restarts, so an empty value means "nothing has
+              # been attempted", never "all is well".
+              - field: lastError
+                label: status
+                format: text
+                remap:
+                  - value: "googleapi: Error 403: User rate limit exceeded., userRateLimitExceeded"
+                    to: RATE LIMITED
+                  # Not "ok": an empty lastError means nothing has been tried,
+                  # which is also what it reads after every container restart.
+                  # "cannot tell" must not share a branch with "all is well".
+                  - value: ""
+                    to: idle
+                  - any: true
+                    to: error
 YAML
   fi
   # Gluetun's control API answers the public-IP and port routes without a
