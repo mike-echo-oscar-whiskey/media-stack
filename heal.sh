@@ -98,7 +98,7 @@ reclaimable_gib() {
   local root="${DATA_ROOT:-./data}/local/torrents" hours=${HEAL_ORPHAN_HOURS:-24} b
   [[ -d "$root" ]] || { echo 0; return 0; }
   [[ "$hours" =~ ^[0-9]+$ ]] || hours=24
-  b=$(find "$root" -type f -links 1 -mmin "+$(( hours * 60 ))" -printf '%s\n' 2>/dev/null \
+  b=$(find "$root" -type f -links 1 -cmin "+$(( hours * 60 ))" -printf '%s\n' 2>/dev/null \
       | awk '{s+=$1} END {print s+0}')
   echo $(( b / 1073741824 ))
 }
@@ -478,6 +478,14 @@ evict_superseded_torrents() {
 # its queue item parked on a warning, and the torrent sweep's "every queue is
 # empty" test does not count a warning - so only matching the queue's own
 # outputPath keeps that file alive.
+# -cmin, never -mmin. unrar restores the timestamps stored inside the archive,
+# so a scene release from 2016 unpacks with a 2016 mtime and is "older than 24
+# hours" the instant it lands - and this sweep then deletes a finished download
+# about thirty seconds after SABnzbd wrote it, before the arr app has polled its
+# queue once. Thirteen films went that way in one night, each logged as
+# "reclaimed 1 finished usenet download nothing imported" which reads exactly
+# like the feature working. ctime is set by the filesystem when the inode is
+# created here and no archive can forge it.
 reclaim_orphaned_usenet() {
   local hours=${HEAL_ORPHAN_HOURS:-24}
   [[ "$hours" =~ ^[0-9]+$ ]] || return 0
@@ -506,7 +514,7 @@ reclaim_orphaned_usenet() {
     (( skip )) && continue
     freed=$(( freed + $(stat -c %s "$f" 2>/dev/null || echo 0) ))
     rm -f -- "$f" && count=$(( count + 1 ))
-  done < <(find "$root" -type f -links 1 -mmin "+$(( hours * 60 ))" -print0 2>/dev/null)
+  done < <(find "$root" -type f -links 1 -cmin "+$(( hours * 60 ))" -print0 2>/dev/null)
 
   if (( count )); then
     prune_empty_download_dirs "$root"
@@ -571,7 +579,7 @@ reclaim_orphaned_downloads() {
     (( skip )) && continue
     freed=$(( freed + $(stat -c %s "$f" 2>/dev/null || echo 0) ))
     rm -f -- "$f" && count=$(( count + 1 ))
-  done < <(find "$root" -type f -links 1 -mmin "+$(( hours * 60 ))" -print0 2>/dev/null)
+  done < <(find "$root" -type f -links 1 -cmin "+$(( hours * 60 ))" -print0 2>/dev/null)
 
   if (( count )); then
     prune_empty_download_dirs "$root"

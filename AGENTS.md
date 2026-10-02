@@ -348,6 +348,17 @@ Each of these cost a debugging session, and none can be read off the code.
   shape (`jq -e 'type == "array"'`) before believing the answer, and never let "cannot tell" take
   the same branch as "nothing". `archive_enabled` had the same fault with `grep`'s exit 2.
 
+- **An unpacked file's mtime is whatever the archive says it is.** `unrar` restores the timestamps
+  stored inside the release, so a 2016 scene rip lands with a 2016 mtime and any `find -mmin`
+  age test treats it as ancient the moment it appears. `reclaim_orphaned_usenet` deleted thirteen
+  finished films inside a minute of SABnzbd writing them - before Radarr had polled its queue once -
+  and logged each as "reclaimed 1 finished usenet download nothing imported", which reads exactly
+  like the sweep working as designed. The symptom at the other end is a queue full of "No files
+  found are eligible for import" against directories that no longer exist. Judge a download's age
+  by **ctime**, which the filesystem sets when the inode is created here and no archive can forge;
+  all three sweeps in heal.sh use `-cmin`. Nothing that arrives through an unpacker can be trusted
+  to tell you when it arrived.
+
 **Never print these:** `.env`, `config/*/config.xml`, `config/homepage/services.yaml`, Seerr's
 `settings.json`, `config/recyclarr/configs/*.yml`. Compare files, call the app's own test endpoint,
 or print a length instead.
