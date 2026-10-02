@@ -181,8 +181,16 @@ if (( ! DRY )); then
   done
   runuser -u "$OWNER" -- ./scripts/union-verify.sh || echo "   union-verify reported a problem"
   echo "   rc reachable from Homepage:"
-  runuser -u "$OWNER" -- docker compose exec -T homepage sh -c \
-    'wget -qO- --timeout=5 --post-data="" --user="$1" --password="$2" http://rclone:5572/core/stats >/dev/null 2>&1 && echo "      yes" || echo "      no"' \
-    _ "$(sed -n 's/^WEBUI_USERNAME=//p' .env)" "$(sed -n 's/^WEBUI_PASSWORD=//p' .env)" 2>/dev/null || true
+  # Homepage ships BusyBox wget, which has no --user/--password - and a password
+  # in argv is readable by anyone running ps. Pass it in the environment and build
+  # the header inside the container.
+  asowner docker compose exec -T \
+    -e RCU="$(sed -n 's/^WEBUI_USERNAME=//p' .env)" \
+    -e RCP="$(sed -n 's/^WEBUI_PASSWORD=//p' .env)" \
+    homepage sh -c '
+      AUTH=$(printf "%s:%s" "$RCU" "$RCP" | base64 -w0)
+      if wget -qO- --timeout=8 --post-data="" --header="Authorization: Basic $AUTH" \
+           http://rclone:5572/core/stats >/dev/null 2>&1; then echo "      yes"
+      else echo "      no - the Archive tile will still show an error"; fi' </dev/null 2>/dev/null || true
 fi
 say "done"

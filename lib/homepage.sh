@@ -596,6 +596,33 @@ YAML
             - field: bytes
               label: sent
               format: bytes
+            - field: errors
+              label: failed
+              format: number
+            # Homepage's remap matches whole values only - no substrings, no
+            # conditions - so this depends on the provider's message being
+            # byte-stable. Google's daily-allowance refusal is, and it is the one
+            # failure that stops the archive tier dead: rclone retries the same
+            # files every twenty minutes for ever while the tile would otherwise
+            # read a healthy-looking speed, sampled mid-retry.
+            #
+            # It only lights up once the *mount* has tried an upload and failed.
+            # A standalone "rclone copy" keeps its own counters, and these reset
+            # when the container restarts, so an empty value means "nothing has
+            # been attempted", never "all is well".
+            - field: lastError
+              label: status
+              format: text
+              remap:
+                - value: "googleapi: Error 403: User rate limit exceeded., userRateLimitExceeded"
+                  to: RATE LIMITED
+                # Not "ok": an empty lastError means nothing has been tried,
+                # which is also what it reads after every container restart.
+                # "cannot tell" must not share a branch with "all is well".
+                - value: ""
+                  to: idle
+                - any: true
+                  to: error
 YAML
   fi
   # Gluetun's control API answers the public-IP and port routes without a
