@@ -45,6 +45,23 @@ curl -fsS -H "Authorization: MediaBrowser Token=\"$KEY\"" \
 
 Repeat with `IncludeItemTypes=Episode` for series.
 
+## Reporting it
+
+Render the result as a table, never as the raw output of the commands above - that output has
+the shape of whatever curl and jq happened to emit, which is not the shape of the question.
+Counts that are shares get a percentage, and a second run gets a before column:
+
+| | with the dub | total | share |
+|---|---:|---:|---:|
+| Films | 4 | 187 | 2% |
+| - of which animation | 4 | 72 | 6% |
+| Episodes | 13 | 318 | 4% |
+
+| | grabs (2h) | of those MULTi | queued | queued MULTi |
+|---|---:|---:|---:|---:|
+| Radarr | 23 | 1 | 13 | 0 |
+| Sonarr | 18 | 1 | 13 | 1 |
+
 ## Reading the answer
 
 The number alone decides nothing. What matters is whether it **moved** since the last run, and
