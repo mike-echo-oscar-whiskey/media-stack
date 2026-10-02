@@ -12,6 +12,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 HERE=$(pwd)
+# archive_enabled lives here and is the single source of truth for "is the cloud
+# tier in use". It is deliberately not reimplemented: it handles rclone.conf being
+# root-owned 0600, where grep exits 2 for "cannot tell" rather than 1 for "no",
+# and three separate checks have already been caught by reading those as the same.
+. lib/alerts.sh
+
 BACKUPS=backups
 KEEP=4
 STATUS=$BACKUPS/last-update.txt
@@ -30,7 +36,54 @@ wait_healthy() {
   done
 }
 
+# Recreating the rclone container empties its VFS cache, because the cache lives
+# in the container's writable layer. With --vfs-cache-mode full a write is
+# acknowledged as soon as it reaches that cache, so mover.sh sees the copy
+# succeed and deletes the local source while the upload is still queued: a file
+# whose upload has not completed exists in exactly one place. On 2026-10-02 nine
+# did, 58 GiB of them, while Google refused every upload with a 403 - a weekly
+# update would have deleted them silently and the first symptom would have been
+# Plex failing to play a film Radarr still listed as present.
+#
+# Stopping rclone is safe; the cache survives a stop and a start. Only a recreate
+# empties it, so this only bites when rclone itself has a new image.
+#
+# Prints the at-risk paths, one per line. Fails closed: if it cannot read the
+# cache or reach the rc it says so on stderr and prints a sentinel, because
+# "cannot tell" must not take the same branch as "nothing is at risk".
+cache_only_files() {
+  local probe cached rel base dir on_drive
+  # Positively prove the container answers before trusting anything it says. An
+  # empty cache listing and a failed one look identical, and the exit status of a
+  # pipeline is the last command's, so testing $? after `exec ... | sed` reads
+  # sed's success and tells you nothing.
+  probe=$(docker compose exec -T rclone sh -c \
+            'rclone rc --rc-addr 127.0.0.1:5572 core/stats 2>/dev/null' </dev/null 2>/dev/null)
+  if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$probe"; then
+    printf 'CANNOT-TELL\n'; return 0
+  fi
+  cached=$(docker compose exec -T rclone sh -c \
+             'find /root/.cache/rclone/vfs -type f 2>/dev/null' </dev/null 2>/dev/null \
+           | sed 's|^/root/.cache/rclone/vfs/media/||')
+  [[ -z "$cached" ]] && return 0
+  while IFS= read -r rel; do
+    [[ -z "$rel" ]] && continue
+    base=${rel##*/}; dir=${rel%/*}
+    # A failed lsf yields no output, grep counts 0, and the file is then treated
+    # as not on Drive - which errs towards calling it at risk. That is the safe
+    # direction here.
+    on_drive=$(docker compose exec -T rclone sh -c \
+                 "rclone lsf --no-traverse \"media:$dir\" 2>/dev/null" </dev/null 2>/dev/null \
+               | grep -cF -- "$base" || true)
+    (( ${on_drive:-0} > 0 )) && continue
+    [[ -f "${DATA_ROOT:-./data}/local/media/$rel" ]] && continue
+    printf '%s\n' "$rel"
+  done <<<"$cached"
+}
+
 run_update() {
+  # cache_only_files needs DATA_ROOT. .env was only read by install_timer.
+  [[ -f .env ]] && { set -a; source .env; set +a; }
   mkdir -p "$BACKUPS"; chmod 700 "$BACKUPS"
   local stamp changed unhealthy
   stamp=$(date +%F-%H%M%S)
@@ -43,6 +96,30 @@ run_update() {
     log "nothing to update"; note "OK - nothing to update"; docker image prune -f >/dev/null; return 0
   fi
   log "new images for: $changed"
+
+  # Two conditions, and both matter. rclone sits behind the "archive" compose
+  # profile, so without a cloud tier it is not a service and can never appear in
+  # $changed - but say so explicitly rather than lean on that, and skip the rc
+  # probe entirely when there is no remote configured. Only a *recreate* empties
+  # the cache; a stop and start preserves it.
+  if [[ " $changed " == *" rclone "* ]] && archive_enabled; then
+    local atrisk n
+    atrisk=$(cache_only_files)
+    n=$(printf '%s' "$atrisk" | grep -c . || true)
+    if [[ "$atrisk" == *CANNOT-TELL* ]]; then
+      log "cannot read rclone's cache or reach Drive - deferring rather than risk the cache"
+      note "DEFERRED - could not verify rclone's cache before recreating it"
+      return 0
+    fi
+    if (( n > 0 )); then
+      log "$n file(s) exist only in rclone's cache and would be destroyed by recreating it:"
+      printf '%s\n' "$atrisk" | sed 's/^/    /'
+      log "move them onto the local branch first, or wait for the uploads to finish"
+      note "DEFERRED - $n file(s) exist only in rclone's cache (see the log for which)"
+      return 0
+    fi
+    log "rclone's cache holds nothing unique - safe to recreate"
+  fi
 
   docker compose images > "$BACKUPS/images-$stamp.txt"
   log "stopping the stack for a consistent snapshot"
