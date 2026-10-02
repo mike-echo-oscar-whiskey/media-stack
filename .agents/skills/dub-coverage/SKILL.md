@@ -51,16 +51,23 @@ Render the result as a table, never as the raw output of the commands above - th
 the shape of whatever curl and jq happened to emit, which is not the shape of the question.
 Counts that are shares get a percentage, and a second run gets a before column:
 
-| | with the dub | total | share |
+Every column header has to read on its own: either it says what the column is in plain words,
+or it carries a `*` and the explanation sits under the table.
+
+| | Carry a Dutch audio track | Total in library | Share |
 |---|---:|---:|---:|
 | Films | 4 | 187 | 2% |
 | - of which animation | 4 | 72 | 6% |
 | Episodes | 13 | 318 | 4% |
 
-| | grabs (2h) | of those MULTi | queued | queued MULTi |
+| | Grabbed in last 2h | MULTi among them * | Waiting in queue | MULTi among those * |
 |---|---:|---:|---:|---:|
 | Radarr | 23 | 1 | 13 | 0 |
 | Sonarr | 18 | 1 | 13 | 1 |
+
+\* `MULTi` is the multi-language tag. These columns are the churn the dub scoring is causing:
+they are the releases grabbed *because* of it, so they are the cost side of the coverage figure
+above.
 
 ## Reading the answer
 
