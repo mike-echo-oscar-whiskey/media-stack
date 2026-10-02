@@ -584,6 +584,11 @@ services:
       --vfs-cache-max-age 1h
       --rc
       --rc-addr 0.0.0.0:5572
+      # The rc is reachable to every container on the media network, and it can
+      # issue core/quit and vfs operations - so it authenticates. These are the
+      # same credentials the Homepage tile sends, which is the only client.
+      --rc-user ${WEBUI_USERNAME}
+      --rc-pass ${WEBUI_PASSWORD}
       --bwlimit "${ARCHIVE_UPLOAD_WINDOW}"
       --vfs-read-chunk-size 32M
       --vfs-read-chunk-size-limit 1G

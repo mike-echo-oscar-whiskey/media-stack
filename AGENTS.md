@@ -362,6 +362,24 @@ Each of these cost a debugging session, and none can be read off the code.
   all three sweeps in heal.sh use `-cmin`. Nothing that arrives through an unpacker can be trusted
   to tell you when it arrived.
 
+- **`mover.sh` takes no lock, and two runs each get the full per-run cap.** `scripts/archive-all.sh`
+  loops `mover.sh --now`, so a hand-run `--now` beside it gives two concurrent movers, each
+  entitled to `ARCHIVE_MAX_GIB_PER_RUN` - 50 GiB against a 50 GiB cache, which is exactly what the
+  clamp at `mover.sh:227` exists to prevent, defeated by running it twice. The cache went 17 percent
+  over its ceiling before anyone noticed. Check for a running mover before forcing one, by pid or by
+  a pattern that does not appear anywhere else in the same command line, and remember the hourly
+  timer is a third way it can already be running.
+- **A Drive 403 pins files in the VFS cache, so the cache cannot honour its own ceiling.** Google
+  Drive's daily upload allowance answers `googleapi: Error 403: User rate limit exceeded.,
+  userRateLimitExceeded`, and rclone then retries the same files every twenty minutes for ever. A
+  file waiting to upload is the one thing rclone will not evict, so `--vfs-cache-max-size` is
+  silently exceeded and the local disk cannot be reclaimed at all - `vfs/stats` shows it as
+  `uploadsInProgress` sitting at 0 percent with `erroredFiles: 0`, which reads as healthy. The
+  symptom to look for is `core/stats` reporting several transfers at 0 Mbit/s with a rising `errors`
+  count; the speed alone looks fine the moment you sample it mid-retry. Nothing local fixes this and
+  the API does not report remaining headroom, so do not start work that fills the disk until a
+  `Copied` line appears in the log again.
+
 **Never print these:** `.env`, `config/*/config.xml`, `config/homepage/services.yaml`, Seerr's
 `settings.json`, `config/recyclarr/configs/*.yml`. Compare files, call the app's own test endpoint,
 or print a length instead.
