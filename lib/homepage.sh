@@ -563,6 +563,14 @@ YAML
   # Only when the archive tier is switched on: with COMPOSE_PROFILES empty there
   # is no rclone container, and a tile for a container that does not exist reads
   # as something broken rather than something not in use.
+  #
+  # The widget reads rclone's own rc API, which compose binds to 0.0.0.0 on the
+  # private network with RCLONE_RC_USER/PASS. Those are container arguments, so
+  # a container that is still running with the old --rc-addr 127.0.0.1 refuses
+  # the connection and the tile shows no figures until rclone next restarts.
+  # That is deliberate: recreating it while the union is assembled leaves a dead
+  # FUSE endpoint only root can clear (AGENTS.md), so this waits for a restart
+  # that happens anyway rather than forcing one.
   if docker compose config --services 2>/dev/null | grep -qx rclone; then
     cat <<YAML
     - Archive:
@@ -570,6 +578,24 @@ YAML
         description: what did not fit, still playable
         server: my-docker
         container: rclone
+        widget:
+          type: customapi
+          url: http://rclone:5572/core/stats
+          method: POST
+          username: $(yq "$WEBUI_USERNAME")
+          password: $(yq "$WEBUI_PASSWORD")
+          refreshInterval: 10000
+          mappings:
+            - field: speed
+              label: uploading
+              format: bytes
+              suffix: /s
+            - field: transfers
+              label: done
+              format: number
+            - field: bytes
+              label: sent
+              format: bytes
 YAML
   fi
   # Gluetun's control API answers the public-IP and port routes without a

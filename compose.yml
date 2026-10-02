@@ -537,6 +537,15 @@ services:
       - /dev/fuse:/dev/fuse
     environment:
       TZ: ${TZ}
+      # The RC is reachable on the private network now, so it needs a login.
+      # These are the flags --rc-user/--rc-pass by another name: rclone reads
+      # RCLONE_<FLAG> for every option. Passing them here rather than on the
+      # command line keeps the password out of `ps`, and `docker exec` inherits
+      # them - so mover.sh's vfs/queue check authenticates without changing.
+      # That check fails *open* ("no rc, nothing to wait for"), so a silent auth
+      # failure would stop it waiting for uploads to drain.
+      RCLONE_RC_USER: ${WEBUI_USERNAME}
+      RCLONE_RC_PASS: ${WEBUI_PASSWORD}
     volumes:
       - ${CONFIG_ROOT}/rclone:/config/rclone
       - type: bind
@@ -556,7 +565,7 @@ services:
     # restarting within the hour are still served locally. A file still waiting
     # to upload is never evicted, whatever its age.
     #
-    # --rc on localhost inside the container, with no port published: mover.sh
+    # --rc on the private media network, with no port published: mover.sh
     # asks vfs/queue whether an upload has actually drained before it calls the
     # space freed, and "docker compose exec" is how it gets in.
     # --dir-cache-time is long because Drive supports change polling; without
@@ -574,8 +583,7 @@ services:
       --vfs-cache-max-size ${RCLONE_CACHE_MAX}
       --vfs-cache-max-age 1h
       --rc
-      --rc-addr 127.0.0.1:5572
-      --rc-no-auth
+      --rc-addr 0.0.0.0:5572
       --bwlimit "${ARCHIVE_UPLOAD_WINDOW}"
       --vfs-read-chunk-size 32M
       --vfs-read-chunk-size-limit 1G
