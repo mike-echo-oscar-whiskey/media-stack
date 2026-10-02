@@ -101,3 +101,35 @@ add_root_folder() {
   arr "$key" POST "$url/api/$v/rootfolder" "$body" >/dev/null
   ok "root folder $root"
 }
+
+# rating_for <entry-json> -> the parental rating a user should have today.
+#
+# `born` (YYYY-MM-DD) is preferred over a fixed `rating`, because a number
+# written once goes stale in silence: a child given 9 keeps 9 on their twelfth
+# birthday and nobody notices until they ask why something is missing. The
+# rating is the Kijkwijzer step they have actually reached, recomputed on every
+# run, so it moves on its own.
+#
+# `rating` still wins when both are present - an explicit number is someone
+# overriding the ladder on purpose, which is the one case the age must not
+# second-guess.
+rating_for() {
+  local entry=$1 born age
+  local r; r=$(jq -r '.rating // empty' <<<"$entry")
+  [[ -n "$r" ]] && { printf '%s' "$r"; return 0; }
+  born=$(jq -r '.born // empty' <<<"$entry")
+  [[ -n "$born" ]] || return 0
+  if ! [[ "$born" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "   WARN born \"$born\" is not YYYY-MM-DD - no rating applied" >&2; return 0
+  fi
+  # Whole years only: date arithmetic in days then divided would make a child
+  # 9 for a few hours before their birthday.
+  age=$(( ( $(date +%Y%m%d) - ${born//-/} ) / 10000 ))
+  (( age >= 0 )) || { echo "   WARN born \"$born\" is in the future - no rating applied" >&2; return 0; }
+  # The Kijkwijzer ladder: the highest step they are old enough for.
+  local step
+  for step in 18 16 14 12 9 6; do
+    (( age >= step )) && { printf '%s' "$step"; return 0; }
+  done
+  printf '0'
+}

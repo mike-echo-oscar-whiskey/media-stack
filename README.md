@@ -1199,15 +1199,21 @@ What `configure.sh` sets up, all idempotent:
   re-applied, so later changes in the UI stay.
 - **Family accounts** from `users.json` (copy `users.example.json`; the file
   is gitignored because it names your family). One object per user: name, role (`admin`,
-  `adult`, `child`), the highest content rating a child may watch, the switches `channels`, `hidden`, `nopass`
+  `adult`, `child`), a child's date of birth, the switches `channels`, `hidden`, `nopass`
   and `rich`, preferred audio language and preferred subtitle language. **Films and series are
   the same for every account**, in Jellyfin as in Plex, and the parental rating decides what
   appears inside them — a hidden library makes a film invisible even when its rating allows it,
   and the two mechanisms disagreeing is how a child ends up with an empty home screen. Music is
   the exception: tracks carry no age rating at all, so it is withheld from a child by library
-  rather than by rating. The rating is on the scale of the metadata country, so with
+  rather than by rating — and because no rating can grant it back, `music: true` on the entry is
+  the only way to give it to an older child who should have it while still being held to a film
+  rating. The rating is on the scale of the metadata country, so with
   `PLEX_CERTIFICATION_COUNTRY=NL` it is Kijkwijzer — `0` (AL), 6, 9, 12, 14, 16, 18 — and it is a
-  rating rather than an age: a five-year-old is `0`, not `5`. Ratings from other systems are
+  rating rather than an age: a five-year-old is `0`, not `5`. Give a child `born` as `YYYY-MM-DD`
+  rather than a fixed `rating` and the step is recomputed on every run, so it moves as they grow:
+  a number written once goes stale in silence, and a child given `9` still has `9` on their
+  twelfth birthday until somebody notices they are missing things. A `rating` set alongside
+  `born` wins, for the case where you mean to overrule the ladder. Ratings from other systems are
   mapped onto the same scale (`PG-13` is 13, `R` is 17), which matters because a library
   usually holds both. There is no `livetv` switch because the stack has no live TV — no
   tuner, no listing provider and no plugin that publishes channels. Children get

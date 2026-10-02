@@ -256,7 +256,13 @@ configure_jellyfin_users() {
   non_music=$(jf GET /Library/VirtualFolders | jq -c '[.[] | select(.Name != "Music") | .ItemId]')
   while IFS= read -r entry; do
     name=$(jq -r '.name // empty' <<<"$entry"); [[ -n "$name" ]] || continue
-    role=$(jq -r '.role // empty' <<<"$entry"); rating=$(jq -r '.rating // empty' <<<"$entry")
+    role=$(jq -r '.role // empty' <<<"$entry"); rating=$(rating_for "$entry")
+    # A child old enough for the music library can be given it back explicitly.
+    # Music is withheld from children by library rather than by rating because
+    # tracks carry no age rating at all - BlockUnratedItems would hide the whole
+    # library - so there is no rating that can grant it and an override is the
+    # only way. Jellyfin needs EnableAllFolders for that, not a longer list.
+    local music; music=$(jq -r 'if .music == true then "yes" else "" end' <<<"$entry")
     # Boolean fields become the flag list the rest of this function works with.
     flags=$(jq -r '. as $e | ["channels","hidden","nopass","rich"] | map(select($e[.] == true)) | join(",")' <<<"$entry")
     audio=$(jq -r '.audio // empty' <<<"$entry"); subs=$(jq -r '.subtitles // empty' <<<"$entry")
@@ -270,7 +276,7 @@ configure_jellyfin_users() {
     fi
     local before after policy
     before=$(jf GET "/Users/$id")
-    policy=$(jq -c --arg role "$role" --arg rating "$rating" --arg flags ",$flags," --argjson nomusic "$non_music" '
+    policy=$(jq -c --arg role "$role" --arg rating "$rating" --arg flags ",$flags," --arg music "$music" --argjson nomusic "$non_music" '
       .Policy
       | .IsAdministrator = ($role == "admin")
       | .IsHidden = ($flags | test(",hidden,"))
@@ -288,7 +294,8 @@ configure_jellyfin_users() {
       # not by hiding a library: a hidden library makes a film invisible even
       # when its rating allows it, and the two mechanisms disagreeing is how a
       # child ends up with an empty home screen.
-      | .EnableAllFolders = ($role != "child") | .EnabledFolders = (if $role == "child" then $nomusic else [] end)
+      | .EnableAllFolders = ($role != "child" or $music != "")
+      | .EnabledFolders = (if $role == "child" and $music == "" then $nomusic else [] end)
       | .EnableAllChannels = ($role == "admin" or ($flags | test(",channels,"))) | .EnabledChannels = []' <<<"$before")
     jf POST "/Users/$id/Policy" "$policy" >/dev/null
     jf POST "/Users/Configuration?userId=$id" "$(jq -c --arg a "$audio" --arg s "$subs" '
@@ -314,8 +321,11 @@ configure_jellyfin_users() {
     [[ ",$flags," == *,rich,* ]] && [[ -n "$(jellyfin_rich_ux "$id")" ]] && ux_note=" (display settings set)"
     after=$(jf GET "/Users/$id")
     local libnote="all libraries"
-    [[ "$role" == child ]] && libnote="films and series, no music"
-    local summary="$role${rating:+ $rating}${flags:+, $flags}; $libnote${audio:+; audio $audio}${subs:+; subtitles $subs}$pw_note$ux_note"
+    [[ "$role" == child && -z "$music" ]] && libnote="films and series, no music"
+    # Only a child has a rating applied, so printing one for an adult reads as a
+    # cap that is not there.
+    local ratenote=""; [[ "$role" == child && -n "$rating" ]] && ratenote=" $rating"
+    local summary="$role${ratenote}${flags:+, $flags}; $libnote${audio:+; audio $audio}${subs:+; subtitles $subs}$pw_note$ux_note"
     if (( created )); then ok "user $name created ($summary) - set a password in Dashboard > Users"
     elif [[ -z "$pw_note$ux_note" && "$(jq -c '{Policy, Configuration}' <<<"$before")" == "$(jq -c '{Policy, Configuration}' <<<"$after")" ]]; then skip "user $name ($summary)"
     else ok "user $name updated ($summary)"; fi

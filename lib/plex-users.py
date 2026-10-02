@@ -16,11 +16,33 @@ The section ids are plex.tv's own (nine digits), not the server's local keys -
 sending the local keys matches nothing and unshares everything.
 """
 
+import datetime
 import json
 import os
 import pathlib
 import sys
 import xml.etree.ElementTree as ET
+
+
+def rating_for(entry):
+    """The Kijkwijzer step this user has reached today.
+
+    Mirrors rating_for in lib/common.sh: an explicit `rating` wins, otherwise
+    `born` (YYYY-MM-DD) is turned into the highest step they are old enough for,
+    so the number moves on its own as they grow instead of going stale.
+    """
+    if entry.get("rating") not in (None, ""):
+        return entry["rating"]
+    born = entry.get("born")
+    if not born:
+        return "?"
+    try:
+        b = datetime.date.fromisoformat(born)
+    except ValueError:
+        return "?"
+    today = datetime.date.today()
+    age = today.year - b.year - ((today.month, today.day) < (b.month, b.day))
+    return next((s for s in (18, 16, 14, 12, 9, 6) if age >= s), 0)
 
 family = json.loads(pathlib.Path(os.environ["PLEX_USERS_FILE"]).read_text())
 home = json.loads(pathlib.Path(os.environ["PLEX_HOME_JSON"]).read_text())
@@ -50,8 +72,11 @@ by_name = {u["title"]: u for u in home.get("users", []) if not u.get("admin")}
 ADULTS_ONLY = {"Music"}
 
 
-def wanted(role: str) -> set[int]:
-    if role == "child":
+def wanted(role: str, music: bool = False) -> set[int]:
+    # Music is withheld from a child by library rather than by rating, because
+    # tracks carry no age rating at all - so no rating can grant it back and
+    # `music: true` on the entry is the only way to give it to an older child.
+    if role == "child" and not music:
         return {i for t, i in sections.items() if t not in ADULTS_ONLY}
     return set(sections.values())
 
@@ -68,7 +93,7 @@ for entry in family:
     user = by_name.get(name)
     if user is None:          # a Jellyfin-only account, not in Plex Home
         continue
-    want = wanted(role)
+    want = wanted(role, entry.get("music") is True)
     record = shared_by_user.get(str(user["id"]))
     ids = ",".join(str(i) for i in sorted(want))
     if record is None:
@@ -82,4 +107,4 @@ for entry in family:
     else:
         print(f"keep {name}")
     if role == "child":
-        print(f"profile {name} {user.get('restrictionProfile') or 'none'} {entry.get('rating', '?')}")
+        print(f"profile {name} {user.get('restrictionProfile') or 'none'} {rating_for(entry)}")

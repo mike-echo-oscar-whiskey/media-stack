@@ -314,6 +314,14 @@ Each of these cost a debugging session, and none can be read off the code.
   Use the bracket trick the same way you would with `grep` on `ps` output - `pgrep -af "Plex Media
   [S]canner"` - or ask the application instead; Plex answers `/activities` with what it is really
   doing. Never conclude a job is running from a check that cannot return false.
+
+  The bracket trick does not rescue the other shape of this: a wait loop whose own command line
+  *invokes* the thing it waits for. `until ! pgrep -f configure.sh; do sleep 10; done; ./configure.sh`
+  contains the literal string in both halves, so `[c]onfigure\.sh` matches it too and the loop waits
+  on itself for ever - quietly, looking exactly like a long run. Two of those sat here for twenty
+  minutes while nothing at all was running, and the second configure.sh never started. Wait on a pid
+  you captured, on a systemd unit's state, or on a marker the job itself writes; never on a pattern
+  that your own command line contains.
 - **A `RETURN` trap fires again when the *calling* function returns.** It is not
   function-local: `trap 'rm -f "$tmp"' RETURN` set inside a function stays armed,
   and when the function that called it returns, the trap runs in that frame -
