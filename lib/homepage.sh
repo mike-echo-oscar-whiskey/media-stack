@@ -578,6 +578,11 @@ YAML
         description: what did not fit, still playable
         server: my-docker
         container: rclone
+        # Homepage reads this container's own rx/tx counters and shows them as
+        # live rates. That is the only honest source for "up and down now":
+        # rclone's rc has no per-direction figure at all, and its speed field is
+        # a lifetime average of both directions combined.
+        showStats: true
         widget:
           type: customapi
           url: http://rclone:5572/core/stats
@@ -586,19 +591,14 @@ YAML
           password: $(yq "$WEBUI_PASSWORD")
           refreshInterval: 10000
           mappings:
-            # core/stats.speed is bytes/elapsedTime over the whole process life,
-            # counting traffic in BOTH directions - it is not an upload rate and
-            # it is not a current one. Labelled "uploading" it read 57 MB/s while
-            # the true upload count was zero and every byte was Bazarr pulling
-            # episodes back down off Drive. The honest upload signal is
-            # vfs/stats.uploadsQueued, which this endpoint does not carry, so the
-            # label says what the number is instead of what we wish it were.
-            - field: speed
-              label: transfer avg
-              format: bytes
-              suffix: /s
+            # No speed field here. core/stats.speed is bytes/elapsedTime over the
+            # whole process life and counts both directions, so it cannot answer
+            # "how fast, which way, right now": labelled "uploading" it read
+            # 57 MB/s while the true upload count was zero and every byte was
+            # Bazarr pulling episodes down off Drive. The current rates come from
+            # showStats below, which reads the container's own rx/tx counters.
             - field: transfers
-              label: done
+              label: files
               format: number
             - field: bytes
               label: moved
