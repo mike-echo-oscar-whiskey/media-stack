@@ -3,6 +3,21 @@
 # and the log/ok/skip/die helpers.
 
 # ---------------------------------------------------------------- Bazarr
+# use_embedded_subs is deliberately off. With it on, Bazarr opens every media file
+# to look for subtitle tracks inside it - and most of this library lives on the
+# rclone branch, where --vfs-cache-mode full means any read pulls the whole file
+# down from Drive into the cache. On 2026-10-02 it fetched 5 GiB across 87
+# episodes in minutes, at 28 MB/s, while a 4K film played through the same mount;
+# the dashboard showed the traffic but labelled it "uploading", so it read as the
+# archive tier working rather than the opposite.
+#
+# ffprobe caching does not save you: a file the mover has just archived is a cache
+# miss, so every archived title becomes one whole-file download. subsync and
+# postprocessing are the other two features that open media files, and both are
+# already off - this is the third and last.
+#
+# The cost: Bazarr cannot see subtitles already inside a file, so it may fetch an
+# external .srt for something that had one. A few kilobytes against terabytes.
 configure_bazarr() {
   log "Bazarr"
   local key
@@ -18,9 +33,11 @@ configure_bazarr() {
     --data-urlencode "settings-radarr-apikey=$(xml_apikey radarr)" \
     --data-urlencode 'settings-auth-type=form' \
     --data-urlencode "settings-auth-username=$WEBUI_USERNAME" \
-    --data-urlencode "settings-auth-password=$WEBUI_PASSWORD" >/dev/null
+    --data-urlencode "settings-auth-password=$WEBUI_PASSWORD" \
+    --data-urlencode 'settings-general-use_embedded_subs=false' >/dev/null
   ok "Sonarr http://sonarr:8989 and Radarr http://radarr:7878 connected"
   ok "Web UI login set (form)"
+  ok "embedded-subtitle probing off - it reads whole files off the archive tier"
 
   # Language profile 1 mirrors SUBTITLE_LANGUAGES on every run (.env is the
   # source of truth for it); profiles you add yourself are left untouched.

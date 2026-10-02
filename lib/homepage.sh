@@ -586,15 +586,22 @@ YAML
           password: $(yq "$WEBUI_PASSWORD")
           refreshInterval: 10000
           mappings:
+            # core/stats.speed is bytes/elapsedTime over the whole process life,
+            # counting traffic in BOTH directions - it is not an upload rate and
+            # it is not a current one. Labelled "uploading" it read 57 MB/s while
+            # the true upload count was zero and every byte was Bazarr pulling
+            # episodes back down off Drive. The honest upload signal is
+            # vfs/stats.uploadsQueued, which this endpoint does not carry, so the
+            # label says what the number is instead of what we wish it were.
             - field: speed
-              label: uploading
+              label: transfer avg
               format: bytes
               suffix: /s
             - field: transfers
               label: done
               format: number
             - field: bytes
-              label: sent
+              label: moved
               format: bytes
             - field: errors
               label: failed
