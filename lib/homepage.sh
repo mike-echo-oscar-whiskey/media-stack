@@ -595,14 +595,28 @@ YAML
           username: $(yq "$WEBUI_USERNAME")
           password: $(yq "$WEBUI_PASSWORD")
           refreshInterval: 10000
+          # list, not the default block: block stacks the value above the label,
+          # so a field reads as two lines.
+          display: list
           mappings:
+            # rclone reports bytes/s. scale converts to Mbit/s (x8 for bits, /1e6
+            # for mega) and the unit is spelled out, because Homepage's own bitrate
+            # format renders "b/s" at low values and that reads as bytes.
+            #
+            # This is the file actually in flight, not core/stats.speed - that is
+            # bytes/elapsedTime over the whole process life and counts both
+            # directions, so it read 57 MB/s on a day when nothing uploaded at all.
+            #
+            # One field, because the number worth pairing it with - how many files
+            # are waiting to go up - is on vfs/stats, and a widget is one request.
+            # core/stats.transfers was tried and dropped: it counts completed
+            # transfers in both directions since the container started, so it resets
+            # on a restart and answers no question anyone asks.
             - field: transferring.0.speed
-              label: now
-              format: bitrate
-              scale: 8
-            - field: transfers
-              label: files
+              label: uploading
+              scale: 0.000008
               format: number
+              suffix: Mbit/s
 YAML
   fi
   # Gluetun's control API answers the public-IP and port routes without a
