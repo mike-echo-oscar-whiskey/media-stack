@@ -74,7 +74,7 @@ configuration order*, *Quality: profiles, formats and guards*, *Connecting downl
 
 ## Procedures
 
-Five of them, as Agent Skills under `.agents/skills/` — the neutral path the standard's clients
+Six of them, as Agent Skills under `.agents/skills/` — the neutral path the standard's clients
 scan, symlinked from `.claude/skills/` because Claude Code reads its own. A client with no skills
 mechanism can simply open the file:
 
@@ -89,6 +89,9 @@ mechanism can simply open the file:
   teardown, clone, credentials, verify and restore sequence.
 - `.agents/skills/docs-audit/SKILL.md` — before trusting the documentation: the checks that compare
   `README.md`, this file and `.env.example` against the code, as commands rather than as a reading.
+- `.agents/skills/dub-coverage/SKILL.md` — before judging whether the dub scoring is worth its
+  re-downloads: how much of the library actually carries the track, measured from Jellyfin's probe
+  rather than from the profile, and what a flat number means.
 
 ## The run order is a dependency order
 
