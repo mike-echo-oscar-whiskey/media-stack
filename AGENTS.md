@@ -386,6 +386,41 @@ Each of these cost a debugging session, and none can be read off the code.
   the API does not report remaining headroom, so do not start work that fills the disk until a
   `Copied` line appears in the log again.
 
+- **Plex freezes on a Samsung TV whenever it transcodes audio while passing video through,
+  and no server-side setting fixes it.** Tizen 6 and higher cannot select an audio track at
+  all - the TV always plays the *first* one - so asking for any other track forces Plex to
+  transcode the audio, and video-direct-plus-audio-transcode is an unfixed Plex-for-Samsung
+  bug: it plays for a minute or two, then stops for good with `range could not be satisfied`
+  repeating in the player log. Reported to Plex in January 2024, never acknowledged, still
+  present. Jellyfin is unaffected because it remuxes a container holding only the wanted
+  track and copies both streams - `IsVideoDirect: true, IsAudioDirect: true` at 9 percent CPU
+  where Plex re-encodes EAC3 to AAC.
+
+  A night went into this on 2026-10-02 and five plausible causes were each disproved by test,
+  so do not re-run them: it is not the bitrate (a 24.1 Mbit/s 4K film direct played at
+  27.4 Mbit/s), not wifi (a cable made it *worse* - 9,280 retransmissions against 721, and
+  the server showed zero TX errors either way), not Plex's throttle threshold (raised from
+  60 to 600, it throttled anyway and still deadlocked), not the default-track flag
+  (`mkvpropedit` set English default on two files and Plex still called it an alternative
+  stream, because Tizen ignores the flag and plays track one), and not the shipped client
+  profile (adding `hevc`, `eac3` and `DirectPlayStreamSelection=true` to
+  `Samsung Tizen.xml` changed nothing - the app sends its own capabilities at request time,
+  which is also why a file direct played HEVC and EAC3 that the shipped profile forbids).
+
+  What the symptom looks like while it lies to you: `throttled=1` with `speed=0` *and* the
+  client reporting `buffering` at the same time, which is contradictory - Plex throttles when
+  the client's buffer is full. The transcoder sits at a few percent CPU with room in
+  `/transcode`, so nothing looks overloaded. Judge it by whether the playback position is
+  advancing, never by throughput: Plex opens and discards a socket per DASH segment batch, so
+  a point-in-time `ss` check catches zero retransmits between bursts and reads as a clean
+  link. Three such checks said the network was healthy while it was dropping thousands of
+  packets under load.
+
+  So: **anything whose wanted audio is not the first track goes to Jellyfin**, which is every
+  `MULTi` release and every dubbed film the children watch. Plex is fine for a single-audio
+  file, where it direct plays 4K happily. Stripping the other tracks would also work and is
+  what the forums suggest, but it fixes the file for one viewer and breaks it for the other.
+
 **Never print these:** `.env`, `config/*/config.xml`, `config/homepage/services.yaml`, Seerr's
 `settings.json`, `config/recyclarr/configs/*.yml`. Compare files, call the app's own test endpoint,
 or print a length instead.
