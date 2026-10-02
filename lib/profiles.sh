@@ -246,22 +246,24 @@ dub_formats() {                   # dub_formats URL
   audio=$(cf_language "$lang Audio" "$ids")
   regex=$(dub_title_regex "$DUB_CODE")
   if [[ -n "$regex" ]]; then title=$(cf_title "$lang Dub (title)" "$regex"); fi
-  # MULTi scores the same as the dub it stands in for, never more. A full-disc
-  # rip keeps every track the disc carried, so MULTi is often the only way a
-  # dubbed version is offered at all - the explicit tags reach perhaps a third
-  # of what exists. But the tag says there are several tracks, not which: the
-  # guides never score it alone, they AND it with a language check, and the one
-  # place they use it is French. Scored above the dub it would trade a release
-  # that *names* the language for one that merely might carry it; scored equal
-  # it wins nothing it should not, and the quality and release-group tiers
-  # decide between two candidates that both claim to be multi-language. Equal
-  # scores also mean neither can displace the other later, since an upgrade
-  # needs a difference and there is none.
-  local multi
-  multi=$(jq -r --arg n "MULTi" 'first(.[] | select(.name == $n)) | .id // empty' <<<"$CF_FMT")
-  DUB_IDS=$(jq -cn --argjson a "$audio" --arg t "${title:-}" --arg m "${multi:-}" \
-    '[$a] + (if $t == "" then [] else [($t|tonumber)] end)
-          + (if $m == "" then [] else [($m|tonumber)] end)')
+  # MULTi is deliberately NOT scored. The tag says a release carries several audio
+  # tracks, not which, and measured here it does not carry Dutch: three MULTi grabs
+  # in a row on 2026-10-02 came back French. Shaun the Sheep arrived as
+  # "Shaun.Le.Mouton...MELBA" and cost a 12.3 GiB 4K file to deliver audio nobody in
+  # this house speaks; the 1080p MULTi candidates for the sampled films carried VFF,
+  # VFQ or Truefrench markers.
+  #
+  # It is also one of the two things that break 4K playback on a Tizen TV. A MULTi
+  # release puts another language first, the TV can only ever play the first audio
+  # track, and Plex then freezes trying to transcode around it - see the Plex entry
+  # under Traps.
+  #
+  # What remains reaches less and tells the truth: the two formats above match
+  # releases that *name* the language, in the title or in the language field.
+  # Measured for this library, 35 of 99 animation films have a 1080p release naming
+  # Dutch against 9 at 2160p, where the current library carries only 5.
+  DUB_IDS=$(jq -cn --argjson a "$audio" --arg t "${title:-}" \
+    '[$a] + (if $t == "" then [] else [($t|tonumber)] end)')
 }
 
 # Only the three scores. The quality merge is written into Recyclarr's own
@@ -279,9 +281,20 @@ dub_prefer() {                    # dub_prefer GUIDE_PROFILE
   # Recyclarr now syncs it, score included, through the [Optional] Language
   # Profiles group in lib/recyclarr-config.py - so setting it here as well would
   # be two owners for one number.
-  wanted=$(jq -c --argjson dub "$DUB_IDS" --argjson s "$DUB_SCORE" '
-    .formatItems |= map(
-      if (.format as $i | $dub | index($i)) then .score = $s else . end)' <<<"$current")
+  # MULTi is zeroed rather than merely left unscored. This section only writes the
+  # scores it wants, and the Recyclarr configs set reset_unmatched_scores: false, so
+  # a score written here once survives for ever: MULTi sat at 500 from an earlier run
+  # and no amount of re-running cleared it. Anything this stack has scored and since
+  # changed its mind about has to be set back explicitly, or configure.sh cannot
+  # converge on an install that ran the older version.
+  local zero
+  zero=$(jq -r --arg n "MULTi" 'first(.[] | select(.name == $n)) | .id // empty' <<<"$CF_FMT")
+  wanted=$(jq -c --argjson dub "$DUB_IDS" --argjson s "$DUB_SCORE" --arg z "${zero:-}" '
+    ($z | if . == "" then -1 else tonumber end) as $zid
+    | .formatItems |= map(
+        if (.format as $i | $dub | index($i)) then .score = $s
+        elif .format == $zid then .score = 0
+        else . end)' <<<"$current")
   if [[ "$(jq -cS . <<<"$wanted")" == "$(jq -cS . <<<"$current")" ]]; then
     skip "quality profile \"$base\""
   else
