@@ -199,6 +199,15 @@ DUB_SCORE=500
 # just to pick up a second audio track, while a file sitting on a -10000
 # penalty still upgrades, because that gain is far larger.
 DUB_UPGRADE_FLOOR=$(( DUB_SCORE + 201 ))
+# DUB_REPLACE_EXISTING drops that floor to the dub's own score, so a release
+# that merely adds the second audio track is reason enough to replace a file
+# already on disk. Off by default because it re-downloads the library a title at
+# a time for an audio track, which is a lot of traffic for a small gain - but it
+# is the only automatic way to get the dub onto what is already there, and with
+# the download clients held to one job each the disk stays bounded while it
+# works through. It only reaches releases that *name* the language: a plain
+# MULTi or DUAL scores nothing, because nothing in the title says what is inside.
+[[ "${DUB_REPLACE_EXISTING:-false}" == true ]] && DUB_UPGRADE_FLOOR=$DUB_SCORE
 
 configure_dub_preference() {      # configure_dub_preference APP URL
   local app=$1 url=$2 v

@@ -1162,6 +1162,15 @@ below are this stack's own and everything after them is the guides':
   multi-language WEB-DL over an English-only Bluray — and the multi-language masters are streaming
   rips. Remux stays above the group. The guides merge for the same reason.
 
+`DUB_REPLACE_EXISTING` decides whether the dub is reason enough to replace a file already on
+disk. Left `false`, the preference only steers what gets grabbed in the first place. Set `true`, the
+upgrade floor drops to the dub's own score and the library re-downloads a title at a time whenever a
+release turns up that *names* the second language — hold the clients to one job each
+(`TORRENT_MAX_ACTIVE_DOWNLOADS=1`; SABnzbd is serial already) or it arrives all at once. It reaches
+only releases that say what is in them: a plain `MULTi` or `DUAL` scores nothing, because the title
+does not name the language and nothing can read inside the file, so expect it to find some titles
+and not others.
+
 `minUpgradeFormatScore` is raised to **701** in the same pass: 500 for the dub plus the 200-point
 spread across the guides' release-group tiers. Nothing already on disk is re-grabbed merely to
 gain a second audio track, while a file sitting on a −10000 penalty still upgrades, because that
