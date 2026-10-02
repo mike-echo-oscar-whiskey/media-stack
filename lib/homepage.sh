@@ -578,40 +578,31 @@ YAML
         description: what did not fit, still playable
         server: my-docker
         container: rclone
-        # Two numbers: how much is waiting to go up, and how fast the file in
-        # flight is going. They sit on different rc endpoints, hence two widgets.
+        # One widget, so one row. The upload backlog lives on vfs/stats and the
+        # rate on core/stats, and a widget is one request - two endpoints would be
+        # two rows.
         #
-        # Not core/stats.speed - that is bytes/elapsedTime over the whole process
-        # life and counts both directions, so it read 57 MB/s on a day when
-        # nothing uploaded at all and every byte was Bazarr reading the archive
-        # back down. uploadsQueued cannot make that mistake: it is a count of real
-        # pending files, it survives a container restart, and stuck above zero is
-        # exactly what a provider refusing uploads looks like from the inside.
-        widgets:
-          - type: customapi
-            url: http://rclone:5572/vfs/stats
-            method: POST
-            username: $(yq "$WEBUI_USERNAME")
-            password: $(yq "$WEBUI_PASSWORD")
-            refreshInterval: 10000
-            mappings:
-              - field: diskCache.uploadsQueued
-                label: to upload
-                format: number
-          - type: customapi
-            url: http://rclone:5572/core/stats
-            method: POST
-            username: $(yq "$WEBUI_USERNAME")
-            password: $(yq "$WEBUI_PASSWORD")
-            refreshInterval: 10000
-            mappings:
-              # Homepage resolves field paths with lodash, so the array index
-              # works. Empty when nothing is moving, hence the default.
-              - field: transferring.0.speed
-                label: now
-                format: bytes
-                suffix: /s
-                defaultValue: 0
+        # Not core/stats.speed: that is bytes/elapsedTime over the whole process
+        # life and counts both directions, so it read 57 MB/s on a day when nothing
+        # uploaded at all and every byte was Bazarr reading the archive back down.
+        # transferring.0.speed is the file actually in flight. bitrate formatting
+        # with scale 8 because rclone reports bytes/s and Mbps is what the rest of
+        # the stack is configured in.
+        widget:
+          type: customapi
+          url: http://rclone:5572/core/stats
+          method: POST
+          username: $(yq "$WEBUI_USERNAME")
+          password: $(yq "$WEBUI_PASSWORD")
+          refreshInterval: 10000
+          mappings:
+            - field: transferring.0.speed
+              label: now
+              format: bitrate
+              scale: 8
+            - field: transfers
+              label: files
+              format: number
 YAML
   fi
   # Gluetun's control API answers the public-IP and port routes without a
