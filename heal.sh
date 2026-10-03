@@ -121,6 +121,19 @@ qbt_stop_downloading() {
   printf '%s\n' "$h"
 }
 
+# Hashes of torrents that are stopped while still incomplete. The brake is the
+# only thing here that stops an incomplete torrent, so intersecting this with the
+# hashes the brake remembers finds the ones it stopped and never started again -
+# and leaves a download stopped by hand alone, which is why the intersection
+# matters rather than just starting everything stopped.
+qbt_stopped_incomplete() {
+  docker compose ps --services --status running 2>/dev/null | grep -qx qbittorrent || return 0
+  docker compose exec -T qbittorrent curl -fsS -m 10 \
+      "http://localhost:8081/api/v2/torrents/info" 2>/dev/null \
+    | jq -r '.[] | select((.state | test("^(stopped|paused)DL$")) and (.progress < 1)) | .hash' \
+    || return 0
+}
+
 qbt_start() {                     # qbt_start hash hash ...
   (( $# )) || return 0
   docker compose ps --services --status running 2>/dev/null | grep -qx qbittorrent || return 0
@@ -191,8 +204,12 @@ check_disk_space() {
     if (( below )) && [[ $engaged != true ]]; then
       stopped=$(qbt_stop_downloading)
       n=$(printf '%s' "$stopped" | grep -c . || true)
+      # Merged, never replaced. A brake that engages, releases and engages again
+      # used to overwrite the list, so anything stopped in an earlier pass was
+      # forgotten and never started back up: twelve torrents sat stopped from
+      # 2026-10-02 to the 3rd that way, with the brake off and nothing looking.
       state=$(jq -c --argjson h "$(printf '%s' "$stopped" | jq -R -s 'split("\n") | map(select(length > 0))')" \
-              '.braked = {engaged: true, hashes: $h}' <<<"$state")
+              '.braked = {engaged: true, hashes: ((.braked.hashes // []) + $h | unique)}' <<<"$state")
       if alerts_on disk; then
         ntfy_push "disk: torrents stopped, $free_min GiB left" \
           "Inside the $stop_at GiB brake point ($floor GiB floor plus $head_gib GiB of headroom). Stopped ${n:-0} downloading torrent(s); usenet pauses itself." disk
@@ -216,12 +233,48 @@ check_disk_space() {
     elif (( ! below )) && [[ $engaged == true ]] && (( free_min >= stop_at + stop_at / 4 )); then
       mapfile -t held < <(jq -r '.braked.hashes[]? // empty' <<<"$state")
       qbt_start ${held[@]+"${held[@]}"}
-      state=$(jq -c '.braked = {engaged: false}' <<<"$state")
+      # engaged goes false but the hashes stay: a start that did not take is only
+      # discoverable afterwards, and the sweep below is what discovers it. They are
+      # pruned there as each torrent is seen running again.
+      state=$(jq -c '.braked.engaged = false' <<<"$state")
       if alerts_on disk; then
         ntfy_push "disk: torrents resumed, $free_min GiB free" \
           "Clear of the $stop_at GiB brake point. Started ${#held[@]} torrent(s) back up." disk
       fi
       log "disk: brake released at $free_min GiB, started ${#held[@]} torrent(s)"
+    fi
+    # Starting at the moment of release is not enough either. That start can miss -
+    # qBittorrent may be mid-restart, the container may be unhealthy, the hash list
+    # may have been overwritten by an earlier version of this code - and nothing
+    # afterwards ever looked at a torrent that was stopped but unfinished. So while
+    # the brake is off, reconcile: anything this brake remembers stopping that is
+    # still stopped and still incomplete gets started, and a hash no longer stopped
+    # is forgotten. Scoped to the remembered hashes so a download someone stopped by
+    # hand is never started behind their back.
+    if [[ "$(jq -r '.braked.engaged // false' <<<"$state")" != true ]]; then
+      local -a remembered=() still=() restart=()
+      mapfile -t remembered < <(jq -r '.braked.hashes[]? // empty' <<<"$state")
+      if (( ${#remembered[@]} )); then
+        mapfile -t still < <(qbt_stopped_incomplete)
+        local r
+        for r in "${remembered[@]}"; do
+          for v in ${still[@]+"${still[@]}"}; do
+            [[ "$r" == "$v" ]] && { restart+=("$r"); break; }
+          done
+        done
+        if (( ${#restart[@]} )); then
+          qbt_start "${restart[@]}"
+          log "disk: brake is off - started ${#restart[@]} torrent(s) it had stopped and left behind"
+          if alerts_on disk; then
+            ntfy_push "disk: ${#restart[@]} stranded torrent(s) restarted" \
+              "The brake stopped them and the release missed them. Free space is $free_min GiB." disk
+          fi
+        fi
+        # Forget the ones that are no longer stopped, so the list does not grow
+        # without bound and a later brake cycle starts from what is actually held.
+        state=$(jq -c --argjson s "$(printf '%s\n' ${still[@]+"${still[@]}"} | jq -R -s 'split("\n") | map(select(length > 0))')" \
+                '.braked.hashes = ((.braked.hashes // []) - ((.braked.hashes // []) - $s))' <<<"$state")
+      fi
     fi
   fi
 

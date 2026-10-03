@@ -303,7 +303,15 @@ mover() {
   # good neighbour on the uplink, not about safety, and there is no way to ask
   # for "archive it all, I am watching it" without it. The timer never passes
   # it, so unattended runs still wait for the window.
-  if (( ! FORCE )) && (( free > floor )) && ! in_quiet_window; then
+  # ARCHIVE_ANY_HOUR is the standing form of --now: archive whenever there is work
+  # rather than only in the quiet window. It exists because the obvious lever -
+  # widening UNRESTRICTED_HOURS - also lifts the speed caps on qBittorrent and
+  # SABnzbd, so it would buy prompt archiving with an uncapped uplink all day.
+  # Wanted while the library is being brought in line with the audio rules
+  # (scripts/audio-regrab.sh), where a replacement cannot start until the previous
+  # one has been archived and the local copy freed.
+  if [[ "${ARCHIVE_ANY_HOUR:-false}" != true ]] \
+     && (( ! FORCE )) && (( free > floor )) && ! in_quiet_window; then
     # Name the reason it wants to run, not the one it used to: with a share
     # policy the disk can be nowhere near the warn mark and there is still work.
     local why
@@ -385,10 +393,30 @@ show_status() {
   journalctl --user -u "$UNIT" --since '30 days ago' --no-pager -o cat 2>/dev/null | grep -E 'archiving|archived' || echo "nothing"
 }
 
+# One mover at a time. Without this, two runs each get the whole
+# ARCHIVE_MAX_GIB_PER_RUN: scripts/archive-all.sh loops --now, so a hand-run
+# beside it gave 50 GiB of traffic against a 50 GiB cache and pushed the VFS cache
+# 17 percent past its ceiling - which is the exact thing the clamp in archive_files
+# exists to prevent, defeated by running the script twice. The hourly timer is a
+# third way it can already be running.
+#
+# Non-blocking rather than queued: a second run has nothing to add, because the
+# first recomputes what is left as it goes. It says so and exits 0, so a timer
+# firing on top of a long run is not a failure.
+with_lock() {                     # with_lock FUNCTION
+  local lock=${MOVER_LOCK:-${XDG_RUNTIME_DIR:-/tmp}/media-stack-mover.lock}
+  exec 9>"$lock" || { log "cannot open the mover lock at $lock"; return 1; }
+  if ! flock -n 9; then
+    log "another mover is already running - leaving it to finish"
+    return 0
+  fi
+  "$1"
+}
+
 FORCE=0
 case "${1:-}" in
-  "")       mover ;;
-  --now)    FORCE=1; mover ;;
+  "")       with_lock mover ;;
+  --now)    FORCE=1; with_lock mover ;;
   install)  install_timer ;;
   status)   show_status ;;
   *) echo "usage: $0 [--now|install|status]" >&2; exit 2 ;;
