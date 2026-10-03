@@ -99,6 +99,16 @@ configure_qbittorrent() {
   local maxdl=${TORRENT_MAX_ACTIVE_DOWNLOADS:-8}
   local maxup=${TORRENT_MAX_ACTIVE_UPLOADS:-10}
   local maxall=${TORRENT_MAX_ACTIVE_TOTAL:-20}
+  # A dead torrent must not hold a download slot. The thresholds below are the
+  # defaults qBittorrent already carried; only the switch that uses them was off,
+  # so a torrent making no progress counted as "downloading" for ever. With
+  # TORRENT_MAX_ACTIVE_DOWNLOADS=1 that is total: on 2026-10-03 a 49-hour-old
+  # torrent with zero seeders held the only slot while another with 65 seeders sat
+  # behind it, and every torrent in the stack was idle for a day and a half.
+  #
+  # The comment lives here and not inside the jq program below, because that body is
+  # single-quoted and an apostrophe in a comment ends the shell string - which is
+  # the same trap as a "#" comment inside compose.yml's folded command block.
   curl -fsS -b "$jar" "$QBT_URL/api/v2/app/setPreferences" --data-urlencode "json=$(jq -cn \
       --argjson maxdl "$maxdl" --argjson maxup "$maxup" --argjson maxall "$maxall" \
       --argjson ratio "${ratio:-null}" --argjson minutes "$(if [[ -n "$days" ]]; then echo $(( days * 1440 )); else echo null; fi)" \
@@ -113,10 +123,13 @@ configure_qbittorrent() {
       max_seeding_time_enabled: ($minutes != null), max_seeding_time: (if $minutes != null then $minutes else -1 end),
       max_ratio_act: 0,
       queueing_enabled: true,
-      max_active_downloads: $maxdl, max_active_uploads: $maxup, max_active_torrents: $maxall }
+      max_active_downloads: $maxdl, max_active_uploads: $maxup, max_active_torrents: $maxall,
+      dont_count_slow_torrents: true,
+      slow_torrent_dl_rate_threshold: 2, slow_torrent_ul_rate_threshold: 2,
+      slow_torrent_inactive_timer: 60 }
       + $sched')" >/dev/null
   ok "save path /data/torrents, incomplete /data/torrents/incomplete (.!qB), UPnP off; port set by Gluetun"
-  ok "at most $maxdl downloading, $maxup seeding, $maxall active at once"
+  ok "at most $maxdl downloading, $maxup seeding, $maxall active at once; a torrent under 2 KiB/s for 60s stops holding a slot"
   # Both units, because the setting is exact in KiB and the line is sold in Mbit.
   local dltxt=unlimited uptxt=unlimited
   (( kib   > 0 )) && dltxt="$kib KiB/s ($(( (kib * 1024 * 8 + 500000) / 1000000 )) Mbit/s)"
