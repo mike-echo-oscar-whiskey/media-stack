@@ -73,8 +73,15 @@ plex_user_languages() {             # plex_user_languages TOKEN
   # space in it survives because the name is the last field.
   while IFS=$'\t' read -r id cur_a cur_s name; do
     [[ -n "${name:-}" ]] || continue
-    want_a=$(jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | .audio // empty' "$file")
-    want_s=$(jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | .subtitles // empty' "$file")
+    # plex_audio / plex_subtitles override audio / subtitles for this server only.
+    # The two servers genuinely want different answers for a young child: on Plex a
+    # non-first audio track forces a transcode and eventually freezes, so the
+    # children take English - the track the television will play - with Dutch
+    # subtitles they cannot read yet but which cost nothing. Jellyfin remuxes a
+    # single-track container and plays Dutch perfectly, so there they get Dutch and
+    # no subtitles. Same file, same library, different server.
+    want_a=$(jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | .plex_audio // .audio // empty' "$file")
+    want_s=$(jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | .plex_subtitles // .subtitles // empty' "$file")
     [[ -n "$want_a$want_s" ]] || continue
     args=''
     if [[ -n "$want_a" ]]; then

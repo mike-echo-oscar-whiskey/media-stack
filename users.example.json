@@ -35,9 +35,46 @@
       "Users that exist in Jellyfin but not here are left alone, never deleted."
     ]
   },
-  { "name": "Parent",     "role": "admin",                 "rich": true },
-  { "name": "Partner",    "role": "adult",                 "channels": true, "nopass": true, "rich": true },
-  { "name": "Teen",       "role": "adult",                 "channels": true, "nopass": true, "rich": true, "audio": "eng", "subtitles": "nld" },
-  { "name": "Kid",        "role": "child", "born": "2013-04-22", "music": true, "nopass": true, "rich": true, "audio": "nld" },
-  { "name": "Little kid", "role": "child", "born": "2017-09-30", "nopass": true, "rich": true, "audio": "nld" }
+  {
+    "name": "Parent",
+    "role": "admin",
+    "rich": true
+  },
+  {
+    "name": "Partner",
+    "role": "adult",
+    "channels": true,
+    "nopass": true,
+    "rich": true
+  },
+  {
+    "name": "Teen",
+    "role": "adult",
+    "channels": true,
+    "nopass": true,
+    "rich": true,
+    "audio": "eng",
+    "subtitles": "nld"
+  },
+  {
+    "name": "Kid",
+    "role": "child",
+    "born": "2013-04-22",
+    "music": true,
+    "nopass": true,
+    "rich": true,
+    "audio": "nld",
+    "plex_audio": "eng",
+    "plex_subtitles": "nld"
+  },
+  {
+    "name": "Little kid",
+    "role": "child",
+    "born": "2017-09-30",
+    "nopass": true,
+    "rich": true,
+    "audio": "nld",
+    "plex_audio": "eng",
+    "plex_subtitles": "nld"
+  }
 ]
