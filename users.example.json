@@ -43,14 +43,12 @@
   {
     "name": "Partner",
     "role": "adult",
-    "channels": true,
     "nopass": true,
     "rich": true
   },
   {
     "name": "Teen",
     "role": "adult",
-    "channels": true,
     "nopass": true,
     "rich": true,
     "audio": "eng",
