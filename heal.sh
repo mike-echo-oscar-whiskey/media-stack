@@ -420,8 +420,32 @@ evict_stalled_metadata() {
   # stall it caused: the brake released at 17:29 and the evictions logged at
   # 17:29:24. time_active counts only the time the torrent was actually running,
   # so a magnet added 329 minutes ago but active for one is judged on the one.
-  stuck=$(jq -r --argjson age "$(( mins * 60 ))" \
-            '.[] | select(.state == "metaDL" and (.time_active // 0) > $age) | .hash | ascii_downcase' <<<"$raw")
+  # Two shapes of the same dead end, and only the first was handled. A magnet that
+  # never resolves sits in metaDL. A torrent that resolved and then found nobody
+  # holding the data sits in stalledDL for ever: it has metadata, so the check
+  # above never looked at it, and nothing else evicts a download that is merely
+  # making no progress. "Rick and Morty S02E03" sat at 0 percent through 204
+  # minutes of running time with zero seeders on 2026-10-03, and would have stayed
+  # until someone noticed by hand.
+  #
+  # The stalled test is deliberately stricter than the metadata one, because a
+  # torrent at 48 percent that pauses for a minute must not be condemned: the
+  # tracker has to report *no seeders at all*, and there must have been no activity
+  # for as long as the threshold itself. A point-in-time read of a swarm is not
+  # evidence - the same reason a seeder count read while a torrent is stopped means
+  # nothing, which cost a wrong diagnosis the same afternoon.
+  local stall=${HEAL_STALL_MINUTES:-120}
+  [[ "$stall" =~ ^[0-9]+$ ]] || { log "HEAL_STALL_MINUTES must be a whole number of minutes (got \"$stall\")"; stall=0; }
+  stuck=$(jq -r --argjson age "$(( mins * 60 ))" --argjson sage "$(( stall * 60 ))" \
+            --argjson now "$(date +%s)" '
+    .[] | select(
+        (.state == "metaDL" and (.time_active // 0) > $age)
+        or ($sage > 0 and .state == "stalledDL"
+            and (.progress // 0) < 1
+            and (.num_complete // 0) == 0
+            and (.time_active // 0) > $sage
+            and ($now - (if (.last_activity // 0) > 0 then .last_activity else .added_on end)) > $sage)
+      ) | .hash | ascii_downcase' <<<"$raw")
   [[ -n "$stuck" ]] || return 0
 
   while IFS= read -r h; do
@@ -440,20 +464,20 @@ evict_stalled_metadata() {
         --data-binary "$(jq -cn --argjson i "[$ids]" '{ids:$i}')" \
         "http://localhost:$port/api/$v/queue/bulk?removeFromClient=true&blocklist=true&skipRedownload=false" \
         && { owned=1; removed=$(( removed + 1 ))
-             log "$name: no metadata after $mins min, blocklisted and searching again ($h)"; }
+             log "$name: stuck download (no metadata after $mins min, or stalled with no seeders after $stall min) - blocklisted and searching again ($h)"; }
       break
     done
     if (( ! owned )); then
       docker compose exec -T qbittorrent curl -fsS -m 15 -o /dev/null -X POST \
         --data "hashes=$h&deleteFiles=true" http://localhost:8081/api/v2/torrents/delete 2>/dev/null \
-        && { removed=$(( removed + 1 )); log "evicted a magnet with no metadata after $mins min ($h)"; }
+        && { removed=$(( removed + 1 )); log "evicted a stuck download nothing owned ($h)"; }
     fi
   done <<<"$stuck"
 
   if (( removed )); then
-    note "removed $removed download(s) stuck without metadata"
-    alerts_on failed && ntfy_push "downloads: $removed stuck magnet(s) removed" \
-      "No metadata after $mins minutes - blocklisted, and the apps are searching for another release." failed
+    note "removed $removed download(s) that could not progress"
+    alerts_on failed && ntfy_push "downloads: $removed stuck download(s) removed" \
+      "No metadata after $mins minutes, or stalled with no seeders for $stall - blocklisted, and the apps are searching for another release." failed
   fi
   return 0
 }
