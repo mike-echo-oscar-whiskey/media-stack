@@ -8,7 +8,7 @@ description: Change a setting in .env correctly — knowing which keys need conf
 ## Three kinds of key, and they behave differently
 
 **Read by `configure.sh` and pushed into an app** — speed caps, seeding limits, categories, UI
-dates, quality choice, dubbed language, Homepage settings. Edit `.env`, then run `./configure.sh`.
+dates, quality choice, Homepage settings. Edit `.env`, then run `./configure.sh`.
 Nothing happens until you do.
 
 **Read by a container at start** — anything listed in `compose.yml`'s `environment:`, which is where

@@ -20,7 +20,7 @@ to be removed again.
 Requesting in Seerr is the right path even when the API would be quicker:
 
 - the request records who asked, and Seerr marks it available when the file lands
-- Seerr picks the profile and root folder the stack configured, including the dubbed twins
+- Seerr picks the profile and root folder the stack configured
 - nothing needs to be undone later if the title turns out to be unavailable
 
 Adding straight to Radarr or Sonarr is the exception, and it leaves Seerr showing the title as

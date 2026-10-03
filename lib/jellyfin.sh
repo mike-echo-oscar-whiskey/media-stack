@@ -66,8 +66,8 @@ configure_jellyfin() {
   add_jf_library() {             # add_jf_library NAME TYPE PATH [ONLINE_METADATA] [METADATA_LANGUAGE] [TRICKPLAY]
     local lang=${5:-en} trick=${6:-false}
     if jq -e --arg p "$3" '[.[].Locations[]] | index($p) != null' <<<"$folders" >/dev/null; then
-      # Existing library: metadata language (the dubbed libraries follow
-      # DUB_LANGUAGE) and the trickplay switch are kept in line; a language
+      # Existing library: metadata language and the trickplay switch are kept
+      # in line; a language
       # change triggers a metadata refresh.
       local lib have
       lib=$(jq -c --arg p "$3" '.[] | select(.Locations | index($p))' <<<"$folders")

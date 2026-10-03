@@ -43,66 +43,13 @@ MEDIA_NAMING = {
     },
 }
 
-# With a dub language set, each profile also folds Bluray into the WEB group at
-# the same resolution, so a custom-format score can choose between a Bluray and
-# a WEB release instead of the quality rank always deciding. It is written here,
-# into Recyclarr's own config, rather than applied to the profile afterwards:
-# Recyclarr syncs nightly on CRON_SCHEDULE and reports "N contain quality
-# changes" when it puts a hand-merged profile back the way the guide has it.
-# Scores are the other way round - reset_unmatched_scores keeps ours, so
-# lib/profiles.sh owns those. See README "Dubbed audio (the original language
-# plus one more)".
-dub_floor = os.environ.get("RECYCLARR_DUB_FLOOR") or ""
+# The quality profiles are the guide's own, untouched. This stack used to fold
+# Bluray into the WEB group at the same resolution so a custom-format score could
+# choose between a Bluray and a WEB release instead of the quality rank deciding -
+# which existed only to let the dub score win. With no dub preference there is
+# nothing for it to decide, so the guide's own ranking and cutoff stand and the
+# whole rewrite is gone. See README "Dutch audio, and why nothing scores for it".
 guides = cache.parents[2] / "trash-guides" / "git" / "official" / "docs" / "json" / app
-guide_profiles = {}
-if dub_floor:
-    for f in sorted((guides / "quality-profiles").glob("*.json")):
-        import json
-        d = json.loads(f.read_text())
-        if d.get("trash_id"):
-            guide_profiles[d["trash_id"]] = d
-
-
-def fold_bluray_into_web(items):
-    """Bluray-<res> joins the "WEB <res>" group beside it, as TRaSH's own
-    [French MULTi.VO] profiles do. Returns (items, renames) - renames maps a
-    group's old name to its new one, which the cutoff has to follow."""
-    renames: dict[str, str] = {}
-    items = [dict(i) for i in items]
-    resolutions = sorted(
-        m.group(1)
-        for i in items
-        if i.get("allowed") and (m := re.fullmatch(r"WEB (\d+p)", i.get("name", "")))
-    )
-    for res in resolutions:
-        gn, bd = f"WEB {res}", f"Bluray-{res}"
-        group = next((i for i in items if i.get("name") == gn), None)
-        bluray = next((i for i in items if i.get("name") == bd), None)
-        if group is None or bluray is None:
-            continue
-        m = dict(group, name=f"Bluray|{gn}", allowed=True,
-                 items=list(group.get("items") or []) + [bd])
-        renames[gn] = m["name"]
-        # The merged group takes the better slot: the one Bluray-<res> held when
-        # it was already allowed, otherwise the group keeps its own.
-        if bluray.get("allowed"):
-            items = [m if i.get("name") == bd else i for i in items if i.get("name") != gn]
-        else:
-            items = [m if i.get("name") == gn else i for i in items if i.get("name") != bd]
-    return items, renames
-
-
-def as_qualities(items):
-    """Recyclarr's `qualities:` shape - a group is a name plus nested names."""
-    out = []
-    for i in items:
-        if not i.get("allowed"):
-            continue
-        if i.get("items"):
-            out.append({"name": i["name"], "qualities": list(i["items"])})
-        else:
-            out.append({"name": i["name"]})
-    return out
 
 
 merged = {"base_url": os.environ["RECYCLARR_URL"], "api_key": os.environ["RECYCLARR_KEY"]}
@@ -121,35 +68,6 @@ for name in names:
         # Our own formats are not in the guide, so an unmatched-score reset
         # would clear them out of every profile on each sync.
         profile["reset_unmatched_scores"] = {"enabled": False}
-        guide = guide_profiles.get(profile.get("trash_id"))
-        if guide:
-            items, renames = fold_bluray_into_web(guide["items"])
-            profile["qualities"] = as_qualities(items)
-            # The cutoff has to name something in that list. Two ways it can stop
-            # doing so, and only the first was handled at first: the cutoff is a
-            # quality that got folded *into* a group (Radarr's Bluray-1080p), or
-            # it is the group's own name, which the fold renamed (Sonarr cuts off
-            # at "WEB 1080p", now "Bluray|WEB 1080p"). Missing the second meant
-            # Recyclarr rejected the whole sonarr.yml - silently, reporting only
-            # "Found 1 config files" and syncing Radarr alone.
-            cutoff = renames.get(guide["cutoff"], guide["cutoff"])
-            for i in items:
-                if cutoff in (i.get("items") or []):
-                    cutoff = i["name"]
-                    break
-            profile["upgrade"] = {
-                "allowed": guide.get("upgradeAllowed", True),
-                "until_quality": cutoff,
-                "until_score": guide["cutoffFormatScore"],
-            }
-            profile["min_format_score"] = guide["minFormatScore"]
-            profile["min_upgrade_format_score"] = int(dub_floor)
-            # Fail here rather than let Recyclarr drop the file without a word.
-            names = {q["name"] for q in profile["qualities"]}
-            if cutoff not in names:
-                raise SystemExit(
-                    f'{app}: cutoff {cutoff!r} is not among the qualities '
-                    f'{sorted(names)} - Recyclarr would discard this file silently')
         profiles.append(profile)
     formats = section.get("custom_format_groups") or {}
     for group in formats.get("add") or []:
@@ -158,6 +76,32 @@ for name in names:
             groups.append(group)
     for group in formats.get("skip") or []:
         skips.append(group)
+
+# Groups a template asks for that this stack does not want. Sonarr's templates
+# list [Optional] Language Profiles in their own `add`, with `select: null` - and
+# that is *not* inert: Recyclarr reports "4 contain updated scores" and puts
+# "Language: Not Original" back to -10000 on every sync. Radarr's templates do
+# not list it, which is why only Sonarr fought back.
+#
+# -10000 on that format refuses every Dutch-dubbed release there is - 40 of 40
+# live ones measured through /api/v3/parse - and those are wanted here, for the
+# children. Zeroing the score after the sync cannot win against something that
+# re-applies it, so the group is skipped at the source instead. Recyclarr's own
+# `skip` list is the mechanism.
+#
+# The id is read from the guide's json rather than written out, because it differs
+# per app: 74aff41... in Sonarr against 13856622... in Radarr.
+SKIP_GROUPS = ("optional-language-profiles",)
+
+for group_file in SKIP_GROUPS:
+    path = guides / "cf-groups" / f"{group_file}.json"
+    if not path.is_file():
+        raise SystemExit(f"the guide no longer ships the {app} group {group_file!r}")
+    import json
+    tid = json.loads(path.read_text())["trash_id"]
+    groups[:] = [e for e in groups if e.get("trash_id") != tid]
+    if tid not in skips:
+        skips.append(tid)
 
 # Guide groups this stack asks for by name. Recyclarr syncs a group only when a
 # profile template asks for it and none of the templates used here do - but a
@@ -177,18 +121,15 @@ EXTRA_GROUPS = {
     # the release title is the only place it is ever stated. The guide scores
     # them all -10000.
     "optional-accessibility": None,
-    # One member. The guides own "Language: Not Original" - a negated
-    # LanguageSpecification on "Original", scored -10000 - and this stack used to
-    # rebuild it by hand in lib/profiles.sh for want of a template that asks for
-    # it. The rest of the group is German and French profiles that do not apply.
-    "optional-language-profiles": {"Language: Not Original"},
-    # One member. MULTi says a release carries several audio tracks without
-    # saying which, so the guides never score it alone - they AND it with a
-    # language check. lib/profiles.sh scores it the same as the dub, on the
-    # reasoning that a full-disc rip is often the only way a dubbed version is
-    # offered at all, and that scoring it *above* the dub would trade a release
-    # that names the language for one that merely might carry it.
-    "optional-miscellaneous": {"MULTi"},
+    # "Language: Not Original" and "MULTi" used to be selected here as well.
+    # Both are gone deliberately. "Language: Not Original" scores -10000 on any
+    # release whose parsed language is not the film's own, which refuses every
+    # Dutch-dubbed release there is - measured, 40 of 40 live ones - and those
+    # are wanted here. MULTi says only that a release carries several audio
+    # tracks, never which, so it was already scored 0 and did nothing. Neither
+    # is requested by the profile templates this stack uses, so leaving them out
+    # is what the unmodified guide gives. See README "Dutch audio, and why
+    # nothing scores for it".
 }
 
 for group_file, wanted in EXTRA_GROUPS.items():

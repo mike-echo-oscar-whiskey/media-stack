@@ -88,7 +88,7 @@ configure_ui_dates() {            # configure_ui_dates KEY URL VERSION
 }
 
 # add_root_folder KEY URL PATH [APIVERSION] [BODY_JSON]
-# Three sections add root folders now - the app itself, the dubbed twins, and
+# Two sections add root folders now - the app itself and
 # the archive tier - so the GET/compare/POST lives here rather than a third
 # time. BODY_JSON is for Lidarr, whose root folders carry the defaults applied
 # to new artists; everything else needs only the path.

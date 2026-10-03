@@ -91,7 +91,6 @@ if (( INTERACTIVE )) && [[ -n "$plex_claim" ]]; then echo "   token accepted (${
 section "Languages and formats"
 ui_locale=$(ask "Locale for dates and clock in the apps and on the dashboard (en-US leaves the apps alone)" "$(default_for UI_LOCALE)")
 subtitle_languages=$(ask "Subtitle languages for Bazarr, most wanted first (ISO 639-1)" "$(default_for SUBTITLE_LANGUAGES)")
-dub_language=$(ask "Second audio language to prefer beside the original, for children who cannot read subtitles yet (ISO 639-1, Enter for none)" "")
 
 section "Usenet"
 usenet_host="" usenet_username="" usenet_password=""
@@ -136,7 +135,7 @@ fi
 # password or a key must not show up in the process list.
 PUID_V=$puid PGID_V=$pgid TZ_V=$tz LAN_IP_V=$lan_ip PLEX_LAN_V=$plex_lan \
 SITE_DOMAIN_V=$site_domain PLEX_PORT_V=$plex_port PLEX_CLAIM_V=$plex_claim \
-UI_LOCALE_V=$ui_locale SUBTITLE_V=$subtitle_languages DUB_V=$dub_language \
+UI_LOCALE_V=$ui_locale SUBTITLE_V=$subtitle_languages \
 USENET_HOST_V=$usenet_host USENET_PORT_V=$usenet_port USENET_USER_V=$usenet_username \
 USENET_PASS_V=$usenet_password USENET_CONN_V=$usenet_connections \
 VPN_KEY_V=$vpn_key VPN_COUNTRIES_V=$vpn_countries COMPOSE_FILE_V=$compose_file \
@@ -150,7 +149,7 @@ pairs = {
     'PLEX_LAN_NETWORKS': 'PLEX_LAN_V', 'SITE_DOMAIN': 'SITE_DOMAIN_V',
     'PLEX_PUBLIC_PORT': 'PLEX_PORT_V', 'PLEX_CLAIM': 'PLEX_CLAIM_V',
     'UI_LOCALE': 'UI_LOCALE_V', 'SUBTITLE_LANGUAGES': 'SUBTITLE_V',
-    'DUB_LANGUAGE': 'DUB_V', 'USENET_HOST': 'USENET_HOST_V',
+    'USENET_HOST': 'USENET_HOST_V',
     'USENET_PORT': 'USENET_PORT_V', 'USENET_USERNAME': 'USENET_USER_V',
     'USENET_PASSWORD': 'USENET_PASS_V', 'USENET_CONNECTIONS': 'USENET_CONN_V',
     'VPN_WIREGUARD_PRIVATE_KEY': 'VPN_KEY_V', 'VPN_SERVER_COUNTRIES': 'VPN_COUNTRIES_V',

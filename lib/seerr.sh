@@ -60,39 +60,9 @@ configure_seerr() {
     '{"minimumAvailability":"released"}' "$SEERR_QUALITY_PROFILE"
   add_seerr_arr sonarr sonarr 8989 "$(xml_apikey sonarr)" /data/media/tv \
     '{"enableSeasonFolders":true,"animeTags":[]}' "$(recyclarr_profile sonarr "$Q_DEFAULT")"
-  remove_seerr_dub_servers
 
   seerr POST /settings/initialize >/dev/null
   ok "setup complete - http://seerr.$SITE_DOMAIN"
-}
-
-# The second entry per app that this stack used to add, pointing at the dubbed
-# twin and its root folder. Both are gone, so the entry is removed - by hand in
-# Seerr it would come back on the next run, which is why this lives here.
-# Idempotent: nothing to find on a stack that never had one.
-remove_seerr_dub_servers() {
-  [[ -n "$DUB_CODE" ]] || return 0
-  local lang jar kind name id
-  lang=$(dub_name "$DUB_CODE")
-  jq -e '.public.initialized == true' "$CONFIG_ROOT/seerr/settings.json" >/dev/null 2>&1 || return 0
-  # ${jar:-}, not $jar: a RETURN trap fires again when the *calling* function
-  # returns, and this one is called from inside configure_seerr and
-  # configure_seerr_prefs - by which point this local is gone and set -u would
-  # end the run. The other traps in this file survive only because their callers
-  # happen to have a jar of their own in scope.
-  jar=$(mktemp); trap 'rm -f "${jar:-}"' RETURN
-  local token; token=$(plex_token); [[ -n "$token" ]] || return 0
-  curl -fsS -c "$jar" -o /dev/null -H 'Content-Type: application/json' \
-    --data "$(jq -cn --arg t "$token" '{authToken:$t}')" "$SEERR_URL/api/v1/auth/plex"
-  for kind in radarr sonarr; do
-    name="${kind^} ($lang)"
-    id=$(curl -fsS -b "$jar" "$SEERR_URL/api/v1/settings/$kind" \
-         | jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | .id // empty')
-    [[ -n "$id" ]] || { skip "Seerr server \"$name\" (already gone)"; continue; }
-    curl -fsS -b "$jar" -o /dev/null -X DELETE "$SEERR_URL/api/v1/settings/$kind/$id" \
-      && ok "removed the Seerr server \"$name\" - one destination per app again"
-  done
-  return 0
 }
 
 # Region and language for Seerr's discover pages; applied on every run.
@@ -174,5 +144,4 @@ configure_seerr_prefs() {
       --data '{"watchlistSyncMovies":true,"watchlistSyncTv":true}' "$SEERR_URL/api/v1/user/1/settings/main"
     ok "owner's Plex watchlist feeds Seerr (films and series, checked every three minutes)"
   fi
-  remove_seerr_dub_servers
 }

@@ -74,7 +74,7 @@ configuration order*, *Quality: profiles, formats and guards*, *Connecting downl
 
 ## Procedures
 
-Six of them, as Agent Skills under `.agents/skills/` — the neutral path the standard's clients
+Five of them, as Agent Skills under `.agents/skills/` — the neutral path the standard's clients
 scan, symlinked from `.claude/skills/` because Claude Code reads its own. A client with no skills
 mechanism can simply open the file:
 
@@ -89,9 +89,6 @@ mechanism can simply open the file:
   teardown, clone, credentials, verify and restore sequence.
 - `.agents/skills/docs-audit/SKILL.md` — before trusting the documentation: the checks that compare
   `README.md`, this file and `.env.example` against the code, as commands rather than as a reading.
-- `.agents/skills/dub-coverage/SKILL.md` — before judging whether the dub scoring is worth its
-  re-downloads: how much of the library actually carries the track, measured from Jellyfin's probe
-  rather than from the profile, and what a flat number means.
 
 ## The run order is a dependency order
 
@@ -101,9 +98,9 @@ mechanism can simply open the file:
 - `configure_sabnzbd` sets `SAB_KEY`, which `arr.sh`, `prowlarr.sh` and `homepage.sh` need.
 - `configure_jellyfin` sets `JELLYFIN_TOKEN`; `jellyfin_api_key` in `arr.sh` returns empty without
   it, so a wrong order fails *silently* rather than loudly.
-- `configure_recyclarr` creates the guide profiles that `configure_dub_preference` then scores
-  and `configure_seerr_prefs` points Seerr at. `dub_prefer` edits the guide profile in place, so
-  it only survives because the Recyclarr configs set `reset_unmatched_scores: false`.
+- `configure_recyclarr` creates the guide profiles that `configure_profiles` then scores and
+  `configure_seerr_prefs` points Seerr at. `foreign_first_block` edits the guide profile in place,
+  so it only survives because the Recyclarr configs set `reset_unmatched_scores: false`.
 - `configure.sh` stops Homepage near the start and `configure_homepage` starts it again at the
   end. A section that dies between the two leaves the dashboard stopped.
 - Inside `configure_homepage`, `homepage_custom_css` runs after `homepage_widgets_yaml`. The CSS
@@ -343,13 +340,15 @@ Each of these cost a debugging session, and none can be read off the code.
   and this looks like superstition. The reproduction that does fail is: function
   sets the trap, returns; its caller then returns.
 
-  Every other `RETURN` trap in `lib/` is called from `configure.sh`'s top level,
-  so there is no enclosing frame and nothing leaks. The one exception is
-  `remove_seerr_dub_servers`, which is nested, and which survives only because
-  both of its callers happen to hold a `local jar` of their own - bash's dynamic
-  scoping pointing the leaked trap at a live variable. That is luck, so it uses
-  `${jar:-}`. Guard the expansion, clean up explicitly, or keep the variable
-  global; do not rely on the caller owning a variable of the same name.
+  Every `RETURN` trap left in `lib/` is called from `configure.sh`'s top level,
+  so there is no enclosing frame and nothing leaks. There used to be one nested
+  exception, `remove_seerr_dub_servers`, which survived only because both of its
+  callers happened to hold a `local jar` of their own - bash's dynamic scoping
+  pointing the leaked trap at a live variable. That was luck, not design, and it
+  is why that function used `${jar:-}`. It has since been removed with the rest
+  of the dub handling, so nothing relies on the luck now - but guard the
+  expansion, clean up explicitly, or keep the variable global if a nested trap is
+  ever added again; never rely on the caller owning a variable of the same name.
 - **An empty answer is not a negative one.** `jq` given an empty body prints nothing and exits 0, so
   a guard built from `cmd | jq` arrives as an empty string that reads as "the thing holds nothing" -
   and a protection written as `if [[ -n "$list" ]]` is then skipped rather than enforced. That is

@@ -12,7 +12,7 @@
 # grep's.
 #
 # Why this exists: written by hand twice while building the junk guards and the
-# dubbed-audio formats, and wrong the first time - this shell is zsh on the host,
+# language-tag formats, and wrong the first time - this shell is zsh on the host,
 # where `echo '\b'` eats the escape, so the regexes under test arrived mangled
 # and matched nothing. A file with a bash shebang cannot make that mistake.
 set -euo pipefail

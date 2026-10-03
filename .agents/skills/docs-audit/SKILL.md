@@ -40,9 +40,9 @@ comm -13 <(grep -oE '^[A-Z_]+=' .env.example | tr -d '=' | sort -u) \
 ```
 
 Filter the result by hand: a name derived at run time is not a setting and belongs in nobody's
-`.env`. Today that is all six of them — `DUB_CODE` (from `DUB_LANGUAGE`), `MIN_FILE_MIB` (from
-`ARCHIVE_MIN_FILE_MIB`), `JELLYFIN_TOKEN`, `SPOTWEB_KEY`, `SPOTWEB_SPOTS`, and `SUDO_USER`, which
-the shell sets and the `scripts/union-*.sh` helpers read. A seventh name appearing is the finding.
+`.env`. Today that is all five of them — `MIN_FILE_MIB` (from `ARCHIVE_MIN_FILE_MIB`),
+`JELLYFIN_TOKEN`, `SPOTWEB_KEY`, `SPOTWEB_SPOTS`, and `SUDO_USER`, which the shell sets and the
+`scripts/union-*.sh` helpers read. A sixth name appearing is the finding.
 
 ```bash
 # documented, read by nothing - the worse direction, because a knob that does
@@ -351,10 +351,9 @@ for n, (i, t) in enumerate(hdr):
 EOF
 ```
 
-Two chapters answer that today and both are fine as they are: *Torrents through a VPN (Gluetun)*,
-which the Quickstart and Prerequisites point at for the one thing you need before you start, and
-*Dubbed versions (children)*, which is a cross-cutting option the per-app chapters each mention.
-A third name appearing is the finding.
+One chapter answers that today and is fine as it is: *Torrents through a VPN (Gluetun)*, which the
+Quickstart and Prerequisites point at for the one thing you need before you start. A second name
+appearing is the finding.
 
 What no check will tell you is whether a chapter is under the right heading in the Contents. Read
 the five part headings and ask of each chapter only whether it belongs under the one above it. *The

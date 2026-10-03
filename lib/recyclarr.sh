@@ -5,8 +5,9 @@
 # What it owns: the quality definitions (how big a release may be per minute of
 # runtime), the custom-format collection with the guide's own scores, and the
 # four quality profiles per app this stack offers. configure.sh must not touch
-# any of those; it keeps the dubbed twins, which profile is the default, and the
-# guards against fakes and cams, which the guides do not cover.
+# any of those; it keeps which profile is the default, the guard against a
+# release that puts a foreign audio track first, and the guards against fakes and
+# cams, which the guides do not cover.
 #
 # One config file per app, written from the guide's own templates and given this
 # stack's URL and API key. Put "# keep" on the first line to take one over; it is
@@ -55,7 +56,6 @@ configure_recyclarr() {
     local rc=0
     RECYCLARR_APP=$app RECYCLARR_DST=$dst RECYCLARR_URL=$url RECYCLARR_KEY=$key \
     RECYCLARR_CACHE=$cache RECYCLARR_TEMPLATES="$*" \
-    RECYCLARR_DUB_FLOOR="${DUB_CODE:+$DUB_UPGRADE_FLOOR}" \
       python3 "$(dirname "${BASH_SOURCE[0]}")/recyclarr-config.py" || rc=$?
     case $rc in
       0) chmod 600 "$dst"; ok "$app.yml: $*"; written=1 ;;

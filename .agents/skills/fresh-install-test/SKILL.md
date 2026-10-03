@@ -43,11 +43,10 @@ answer after it:
 | 4 | Plex claim token | *(empty)* |
 | 5 | Locale | *(empty)* |
 | 6 | Subtitle languages | `nl,en` |
-| 7 | Dubbed audio | `nl` |
-| 8 | Do you have a Usenet provider? | `n` — carried afterwards instead |
-| 9 | WireGuard private key | `$VPN_KEY` |
-| 10 | Countries | `Netherlands` |
-| 11 | Weather coordinates | *(empty)* |
+| 7 | Do you have a Usenet provider? | `n` — carried afterwards instead |
+| 8 | WireGuard private key | `$VPN_KEY` |
+| 9 | Countries | `Netherlands` |
+| 10 | Weather coordinates | *(empty)* |
 
 Answering `n` to the Usenet question keeps the provider's password off the transcript entirely: the
 keys stay empty and the copy script below fills them before the second `configure.sh`.

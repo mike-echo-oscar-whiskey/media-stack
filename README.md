@@ -109,7 +109,7 @@ exists. See README "The archive tier".
 13. [Connecting Bazarr](#13-connecting-bazarr)
 14. [Plex library setup](#14-plex-library-setup)
 15. [Music (Lidarr)](#15-music-lidarr)
-16. [Dubbed audio (the original language plus one more)](#16-dubbed-audio-the-original-language-plus-one-more)
+16. [Dutch audio, and why nothing scores for it](#16-dutch-audio-and-why-nothing-scores-for-it)
 17. [Jellyfin alongside Plex](#17-jellyfin-alongside-plex)
 
 **Operating it**
@@ -263,7 +263,7 @@ docker compose up -d
 `setup.sh` measures what the machine can tell it — user and group ids, timezone, LAN address
 and subnet, the `render`/`video` groups, whether a GPU is present — and asks only for what it
 cannot: the hostname suffix, other networks Plex should treat as local, whether Plex may be
-reached from outside, a Plex claim token, the locale, subtitle and dub languages, a Usenet
+reached from outside, a Plex claim token, the locale, subtitle languages, a Usenet
 account, a WireGuard key for the VPN, and coordinates for the weather tile. Every question has
 a default and Enter takes it; the Usenet and VPN questions are skipped with one keystroke, and
 passwords and keys are read without echo. With no terminal — a pipe or a script — it takes
@@ -588,8 +588,8 @@ instance**, because Recyclarr groups instances by `base_url` and silently does n
 several share a server; and `reset_unmatched_scores` is off, or a sync would clear the scores of
 the formats that are ours rather than the guides'.
 
-What `configure.sh` still owns, because no guide covers it: the **dubbed-audio preference**
-(section [Dubbed audio](#16-dubbed-audio-the-original-language-plus-one-more)), which profile is the default, and the release guard below. Every other quality decision —
+What `configure.sh` still owns, because no guide covers it: which profile is the default, the
+guard against a release that puts a foreign audio track first, and the release guard below. Every other quality decision —
 which formats exist, what they score, what each profile accepts — belongs to the guides. Profiles this stack managed before the
 guides took over (`1080p Encode` and friends) are emptied onto the default and deleted.
 
@@ -622,7 +622,7 @@ fakes was *grabbed* and only then failed, including the two whose titles carried
 while the one with a clean title could never have matched a pattern at all. What stopped all
 of them was the guard below, which looks at the release date and the file itself.
 
-If you do reach for a pattern — a dubbed-audio tag, say (section [Dubbed audio](#16-dubbed-audio-the-original-language-plus-one-more)) — never guess what it
+If you do reach for a pattern — a language tag, say — never guess what it
 matches. Ask the app's own parser:
 
 ```bash
@@ -634,6 +634,51 @@ Without `-r` it prints the quality, languages and custom formats the app matches
 With `-r` it creates a throwaway custom format holding that regex, reports which titles it
 catches, and deletes it again. The engine is .NET's rather than grep's, and a pattern that
 reads correctly in a shell can match nothing here.
+
+#### Audio that is not in the first track
+
+One format of ours does stand between you and a bad release, and it is there for a playback
+reason rather than a quality one. A Samsung Tizen TV can only ever play a file's **first** audio
+track, so when the wanted language sits anywhere else Plex transcodes the audio while passing the
+video through — and that combination freezes playback for good. It is an unfixed Plex-for-Samsung
+defect, not a setting; the full diagnosis, and the five causes that were tested and ruled out, are
+in `AGENTS.md` under *Traps*. Jellyfin is unaffected, which is why anything whose wanted audio is
+not the first track belongs there (section [Jellyfin alongside Plex](#17-jellyfin-alongside-plex)).
+A release that puts another language's audio first is therefore unplayable here rather than merely
+untidy.
+
+`Foreign Audio First (title)` scores **-10000** in all four managed profiles, so such a release is
+rejected rather than ranked lower. It matches the release *title*, which is deliberate: the two
+guide formats that look as though they should catch these both miss, for reasons that are
+structural rather than accidental.
+
+| Guide format | Why it misses |
+|---|---|
+| `Language: Not Original` | goes silent whenever English is present at all — an `iTA-ENG` release parses as *[Italian, English]*, so nothing about it is "not original". Neither app has any concept of track **order** |
+| `Bad Dual Groups` | anchors on the **parsed** release group, and a repackager rewrites that: `x264-iFT_EniaHD` parses as group `iFT`, so three Russian re-uploads arrived scored **+1750** as Tier 02 Blurays |
+
+Measured against this library's own history — 350 distinct grabbed titles from
+`/api/v3/history`, checked against the audio tracks Jellyfin probed on import — 31 films hold an
+English track that is not track one, 27 of them said so in the release title, and the guides'
+guards rejected 3. Only patterns that earned their place are in the format:
+
+| Pattern | Releases matched | Genuinely foreign-first | Kept |
+|---|---:|---:|---|
+| `FOREIGN-ENG` pair (`iTA-ENG`, `RUS-ENG`, …) | 8 | 8 | yes |
+| `EniaHD` | 3 | 3 | yes |
+| `TRUEFRENCH` / `VFF` / `VFQ` / `VOSTFR` | 2 | 2 | yes |
+| `[Esp]` | 6 | 5 | yes |
+| `DUAL` | 6 | 4 | **no** — too loose |
+| `MULTi` | 9 | 6 | **no** — says only that several tracks exist, never which or in what order |
+
+**Dutch is deliberately absent from the pattern.** A `.DUTCH.` release carries the track the
+children need (section [Dutch audio, and why nothing scores for it](#16-dutch-audio-and-why-nothing-scores-for-it)), and the one whose
+tracks have been probed here puts English first anyway — so blocking it would refuse exactly the
+content that is wanted. The guard is about a *foreign* language displacing English, not about a
+second track existing. Verified: 0 of 40 live `.DUTCH.` releases are rejected by it.
+
+What this does **not** do is fix a file already on disk. The guard stops new ones arriving;
+re-ordering the tracks of a file that is already in the library is a separate, manual job.
 
 #### The release guard
 
@@ -1102,101 +1147,72 @@ the dashboard tile. Lidarr thinks in **albums**: requesting a track means gettin
 Manual, as everywhere: indexers come from Prowlarr, so nothing to add here — but music
 availability on Usenet/torrent indexers is thinner than film/TV.
 
-## 16. Dubbed audio (the original language plus one more)
+## 16. Dutch audio, and why nothing scores for it
 
 Subtitles (section [Connecting Bazarr](#13-connecting-bazarr)) are useless to a child who cannot read yet: the *audio* has to be
-in their language. What that needs is one file carrying both languages, not a second copy of the
-film — so this adds no library, no root folder and no second request. It is optional and **off as
-shipped**: with `DUB_LANGUAGE` empty nothing here exists. Set it to an ISO 639-1 code (`nl`, `de`,
-`fr`, …) and every quality profile in **Radarr and Sonarr** starts preferring a release that
-carries the original audio *and* that language.
+in their language. This stack tried twice to arrange that automatically and **neither attempt is
+here any more**. What is left is simpler and works: ask for a `.DUTCH.` release by hand when you
+want one, and let Jellyfin give the children the Dutch track.
 
-This follows TRaSH's own `[French MULTi.VO]` profiles, which exist for French and German and for
-no other language — the guides ship no Dutch language format at all. So the first two formats
-below are this stack's own and everything after them is the guides':
+### What was removed, and why
 
-- two custom formats — *Dutch Audio*, matching the language the app parses from the release, and
-  *Dutch Dub (title)*, matching the spellings its parser does not know (`NLD`, `NL Gesproken`,
-  `Nagesynchroniseerd`). Both deliberately avoid the bare word "Dutch", which the first format
-  already covers and which would otherwise match a film *called* "The Dutch Job".
+Two designs, both gone:
 
-  How much each format does depends on the language, and the split was measured against
-  `/api/v3/parse` rather than guessed. The parser resolves most tags on its own — `GERMAN`,
-  `GER`, `German.DL`, `FRENCH`, `TRUEFRENCH`, `VFF`, `VF`, `VFQ`, `SPANISH`, `Castellano`,
-  `ITA`, `POLISH`, `PLDUB`, `Dubbing.PL`, `CZ.Dabing`, `HUN`, `RUS`, `JAPANESE` — so for those
-  languages the language format alone is enough and no title pattern is created. Five codes get
-  one because their common tags come back as *Unknown*: `nl`, `pt` (`PT-BR`, `DUBLADO`), `sv`
-  (`SWE`, `Svenskt Tal`), `tr` (`DUBLAJ`, `TR.DUB`) and `cs` (`CZECH`, `DABING`). Polish
-  *Lektor* is left out on purpose — that is one voice read over the original audio, not a dub,
-  and a child needs the dub.
+- **A dubbed twin of every quality profile**, with its own root folder and its own Seerr
+  destination. It doubled the configuration surface and the twin's root folder kept drifting out
+  of step with the real one.
+- **A pair of Dutch custom formats scored +500** in the ordinary profiles — one on the language
+  Radarr parses, one on the tag spellings it reads as Unknown.
 
-  A regional dub is a language of its own in both apps, so `pt` also accepts
-  *Portuguese (Brazil)* and `es` also accepts *Spanish (Latino)*; without that a Brazilian or
-  Latin-American dub would never match;
-- the guides' *Language: Not Original* at **−10000**, which refuses any release that dropped the
-  original audio — a Dutch-only dub included, which is the point: the file has to work for everyone
-  in the house. The format and its score are both the guides', synced by Recyclarr; this stack only
-  asks for the group that carries it. It used to be rebuilt here by hand, on the reasoning that
-  Recyclarr syncs only what a profile template asks for and no template used here asks for this
-  one. That is true and was never the whole story: a **custom-format group named with an explicit
-  `select`** is synced whether or not a template wants it, which is how both this and the
-  accessibility formats below arrive without adopting a German or French template wholesale. Two
-  owners for one score is a bug waiting to happen, so `dub_prefer` no longer touches it;
-- the guides' **[Optional] Accessibility** group, whose four formats — *WiTH AD*, *WiTH ASL*,
-  *WiTH BASL*, *WiTH BSL* — all score **−10000**. An accessibility release carries a narration of
-  what is on screen, or a sign-language inset, *instead of* the normal audio: the file has one
-  audio track and it is the description. Nothing downstream can repair that, because there is no
-  second track to switch to, and neither app's `mediaInfo` records track titles or dispositions, so
-  the release guard cannot recognise it on import either. The release title is the only place it is
-  ever stated — `Rick and Morty S01E01 Pilot with Audio Description …-Kitsune`, `… .MULTi.AD.…` —
-  and renaming on import throws that away, which is why the library looks blameless afterwards. The
-  group's formats are all optional, so `lib/recyclarr-config.py` has to name them in `select`;
-  adding the group alone syncs nothing. Note what this does **not** refuse: a release carrying a
-  descriptive track *beside* a normal one is a choice, not a defect, and only its score suffers;
-- the guides' **MULTi** at the same **+500**, never more. A full-disc rip keeps every track the
-  disc carried, so MULTi is often the only way a dubbed version is offered at all — the explicit
-  tags reach a fraction of what exists, and without this *Shrek* has no reachable candidate while
-  *Monsters, Inc.* does. But the tag says there are several tracks, not which: the guides never
-  score it alone, they AND it with a language check, and the one place they use it is French.
-  Scored above the dub it would trade a release that *names* the language for one that merely
-  might carry it; scored equal it wins nothing it should not, the release-group tiers decide
-  between two multi-language candidates, and neither can displace the other later because an
-  upgrade needs a difference and there is none. Its regex excludes `Multi-Subs`, which is
-  subtitles rather than audio;
-- the two dub formats at **+500**, with `minFormatScore` left at the guides' `0`. A preference,
-  never a requirement: a film with no dub available downloads exactly as it would without this
-  section, instead of sitting in the wanted list forever;
-- Bluray folded into the `WEB` group at the same resolution, so `HD Bluray + WEB` ranks
-  `[Bluray-1080p | WEBDL-1080p | WEBRip-1080p]` as one step, `Bluray-720p` below it. Quality rank
-  beats custom-format score in both apps, so without the merge +500 could never pick a
-  multi-language WEB-DL over an English-only Bluray — and the multi-language masters are streaming
-  rips. Remux stays above the group. The guides merge for the same reason.
+The second looked sound and could not work, for a reason worth recording. Measured over the 350
+distinct release titles in Radarr's own grab history:
 
-`DUB_REPLACE_EXISTING` decides whether the dub is reason enough to replace a file already on
-disk. Left `false`, the preference only steers what gets grabbed in the first place. Set `true`, the
-upgrade floor drops to the dub's own score and the library re-downloads a title at a time whenever a
-release turns up that *names* the second language — hold the clients to one job each
-(`TORRENT_MAX_ACTIVE_DOWNLOADS=1`; SABnzbd is serial already) or it arrives all at once. It reaches
-only releases that say what is in them: a plain `MULTi` or `DUAL` scores nothing, because the title
-does not name the language and nothing can read inside the file, so expect it to find some titles
-and not others.
+| | Grabs it matched |
+|---|---:|
+| `Dutch Audio` (the parsed language) | **2** of 350 |
+| `Dutch Dub (title)` (`NLD`, `NL Gesproken`, `Nagesynchroniseerd`) | **0** of 350 |
 
-`minUpgradeFormatScore` is raised to **701** in the same pass: 500 for the dub plus the 200-point
-spread across the guides' release-group tiers. Nothing already on disk is re-grabbed merely to
-gain a second audio track, while a file sitting on a −10000 penalty still upgrades, because that
-gain is far larger. To pull the dub onto a film you already have, search that film by hand.
+And the +500 could never have won anyway, because the guides' own `Language: Not Original` scores
+**−10 000** on any release whose parsed language is not the film's original — which is every Dutch
+dub of an English film. A `.DUTCH.` release landed at −9 500 against a `minFormatScore` of 0, so it
+was refused. **40 of 40** live Dutch releases tested through `/api/v3/parse` were rejected by it.
 
-**In Plex**: set the children's profile *Audio language* to Nederlands (Settings → Account →
-Language). A `MULTi` file then plays Dutch for them and the original for you; profiles are per
-user, so the two never interfere.
+That format is not in the guides' profile templates; it arrived only because `lib/recyclarr-config.py`
+asked for its group by name. Removing that request is what the unmodified guide gives, and it is
+what makes a `.DUTCH.` release grabbable at all.
 
-Two limits worth knowing: a dub cannot be added afterwards the way Bazarr adds subtitles — it is
-a matter of finding the right release, or nothing; and dubs exist mostly for children's films and
-animation, which is exactly the case this is for, but far from every title has one. The word list
-in `configure.sh` (`dub_title_regex`) holds patterns for Dutch only; other languages use the
-parser's own language detection until someone adds patterns for them.
+### What happens now
 
----
+| | |
+|---|---|
+| A `.DUTCH.` release scores | **0** — acceptable, no longer refused |
+| Will it be *chosen* automatically? | **No.** A good English WEB release scores +1700 on the guides' release-group tiers; `HDEX`, `TRIPEL`, `NLKIDS` and `WESTVLETER` are in no tier at all and score 0 |
+| How to get one | interactive search in Radarr — pick the `.DUTCH.` release, one click |
+| Who hears Dutch | the children, in **Jellyfin** |
+
+Jellyfin is the part that makes this work without a second copy. Each account carries its own
+`AudioLanguagePreference` with `PlayDefaultAudioTrack` off (section [Jellyfin alongside Plex](#17-jellyfin-alongside-plex)), so a
+child's account selects the Dutch track **whatever position it sits in**, while an adult's selects
+English. One file, both audiences.
+
+Plex cannot do that on a Samsung TV: the set plays only the first audio track, so asking for any
+other one makes Plex transcode the audio and the picture freezes for good (see *Traps* in
+`AGENTS.md`). So Plex gets English direct play, Jellyfin gets the Dutch.
+
+### Why not a profile that guarantees Dutch as track 1
+
+Because the information does not exist where a profile could read it. Of 410 Dutch-labelled 1080p
+releases live on the indexers, **409 state no track order in the title**, and Radarr's own
+`mediaInfo` records `audioLanguages` as an unordered set. Only a probe of the finished file knows
+the order — which is why the figures in this chapter come from Jellyfin, which probes on import.
+
+The one verified sample of a dubbed film, `How.To.Train.Your.Dragon.2010.DUTCH…-HDEX`, carries
+**eng** then **nld** — English first. So a `.DUTCH.` release is likely to be right for both
+audiences already, and a guarantee would cost a download-probe-discard loop per film to obtain.
+
+A profile *could* be certain for films whose **original** language is Dutch, which Radarr knows as
+`originalLanguage` — but that is Dutch cinema, not Dutch Disney, and there are none in this
+library.
 
 ## 17. Jellyfin alongside Plex
 
@@ -1239,7 +1255,7 @@ What `configure.sh` sets up, all idempotent:
   unrated items blocked and no SyncPlay; adults and children may not delete media or
   control other people's players. An audio preference makes that track play whenever the
   film has it — which is how one multi-language file serves a child in Dutch and everyone
-  else in the original (section [Dubbed audio](#16-dubbed-audio-the-original-language-plus-one-more)); a subtitle preference turns subtitles on
+  else in the original (section [Dutch audio](#16-dutch-audio-and-why-nothing-scores-for-it)); a subtitle preference turns subtitles on
   always. Missing users are created without a password (set one in Dashboard > Users);
   rights and preferences are re-applied on every run, so edit them in the file, not in the
   UI. Users that are not in the file are never touched, let alone deleted.

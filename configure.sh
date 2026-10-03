@@ -14,8 +14,8 @@
 #                          naming; Bazarr language profile; SABnzbd Usenet
 #                          provider (from USENET_* in .env); Recyclarr, which
 #                          syncs the TRaSH Guides' quality definitions, custom
-#                          formats and profiles into Radarr and Sonarr, plus a
-#                          dubbed twin of each profile; Seerr end to end
+#                          formats and profiles into Radarr and Sonarr; Seerr
+#                          end to end
 #                          (Plex login, server, libraries, Sonarr, Radarr);
 #                          the Homepage dashboard config; a hostname check.
 # What stays yours:        indexers (Prowlarr, incl. tagging the ones that need
@@ -80,17 +80,6 @@ PY
 # Host-side URLs (published ports) and the names the apps use for each other.
 # qBittorrent lives in Gluetun's network namespace
 # and is reached under Gluetun's name.
-# Dubbed audio (DUB_LANGUAGE in .env): the arr apps name languages in English.
-DUB_CODE=${DUB_LANGUAGE:-}
-dub_name() {
-  case "$1" in
-    nl) echo Dutch ;;    de) echo German ;;   fr) echo French ;;     es) echo Spanish ;;
-    it) echo Italian ;;  pt) echo Portuguese ;; pl) echo Polish ;;   sv) echo Swedish ;;
-    da) echo Danish ;;   fi) echo Finnish ;;  cs) echo Czech ;;      hu) echo Hungarian ;;
-    tr) echo Turkish ;;  ru) echo Russian ;;  ja) echo Japanese ;;   ko) echo Korean ;;
-    zh) echo Chinese ;;  en) echo English ;;  *) echo "" ;;
-  esac
-}
 iso639_2() {                     # iso639_2 nl -> nld   (Jellyfin stores ISO 639-2 codes)
   case "${1,,}" in
     nl) echo nld ;; en) echo eng ;; de) echo deu ;; fr) echo fra ;; es) echo spa ;; it) echo ita ;;
@@ -99,45 +88,6 @@ iso639_2() {                     # iso639_2 nl -> nld   (Jellyfin stores ISO 639
     *) echo "$1" ;;
   esac
 }
-# The arr parsers read a language from tags they know (DUTCH, GERMAN, ...) but
-# not from every spelling a dub carries: NLD and "NL Gesproken" parse as
-# Unknown. This adds those, deliberately without the bare language word, which
-# the language condition already covers and which would also match a film
-# *called* "The Dutch Job". Empty = language condition only.
-dub_title_regex() {
-  # Only the spellings the parser itself cannot read. Checked against
-  # /api/v3/parse: GERMAN, GER, German.DL, FRENCH, TRUEFRENCH, VFF, VF, VFQ,
-  # SPANISH, Castellano, ITA, POLISH, PL, PLDUB, Dubbing.PL, CZ, CZ.Dabing,
-  # HUN, RUS, DANISH, FINNISH, JAPANESE, KOREAN, CHINESE and the bare language
-  # words all resolve on their own and need nothing here. What follows is what
-  # came back as Unknown. Polish "Lektor" is deliberately absent: it is a
-  # single voice reading over the original audio, not a dub, and a child needs
-  # the dub.
-  case "$1" in
-    nl) echo '\b(NLD|NL[ ._-]?(Gesproken|Audio|Dub|Dubbed)|Nagesynchroniseerd|Dutch[ ._-]?(Audio|Dub|Dubbed))\b' ;;
-    pt) echo '\b(PT[ ._-]?BR|DUBLADO)\b' ;;
-    sv) echo '\b(SWE([ ._-]?(Dub|Dubbed|Tal))?|Svenskt[ ._-]?Tal)\b' ;;
-    tr) echo '\b(DUBLAJ|TR[ ._-]?Dub(bed)?)\b' ;;
-    cs) echo '\b(CZECH|DABING|CZ[ ._-]?Dab(ing)?)\b' ;;
-    *) echo "" ;;
-  esac
-}
-
-# A regional dub is a language of its own in both apps: a Brazilian dub parses
-# as "Portuguese (Brazil)", never "Portuguese", and a Latin-American one as
-# "Spanish (Latino)". Both belong in the same twin, so the language format
-# carries one condition per name and they OR. A name the app does not know is
-# skipped, which is why Sonarr's shorter list is not a problem.
-dub_languages() {                # dub_languages pt -> Portuguese, Portuguese (Brazil)
-  local main; main=$(dub_name "$1")
-  [[ -n "$main" ]] || return 0
-  printf '%s\n' "$main"
-  case "$1" in
-    pt) printf '%s\n' "Portuguese (Brazil)" ;;
-    es) printf '%s\n' "Spanish (Latino)" ;;
-  esac
-}
-
 # From .env, not from `docker compose config`: a transient Compose failure
 # once made this script treat the VPN as absent and point every download
 # client at the wrong host.
@@ -220,8 +170,8 @@ for part in lib/*.sh; do . "$part"; done
 # downstream asks for (and fills SEERR_QUALITY_PROFILE); configure_sabnzbd and
 # configure_jellyfin leave SAB_KEY and JELLYFIN_TOKEN behind for the arr apps,
 # and a missing token fails silently rather than loudly; the guide profiles
-# must exist before the dubbed twins copy them and before Seerr is pointed at
-# one. Homepage is stopped near the top and started again by
+# must exist before configure_profiles scores them and before Seerr is pointed
+# at one. Homepage is stopped near the top and started again by
 # configure_homepage at the end.
 ensure_webui_credentials
 wait_healthy
@@ -235,12 +185,12 @@ configure_arr sonarr "$SONARR_URL" /data/media/tv     tv    tv
 configure_arr radarr "$RADARR_URL" /data/media/movies  movie movies
 configure_arr lidarr "$LIDARR_URL" /data/media/music   music music v1
 configure_recyclarr
-configure_dub_preference radarr "$RADARR_URL"
-configure_dub_preference sonarr "$SONARR_URL"
+configure_profiles radarr "$RADARR_URL"
+configure_profiles sonarr "$SONARR_URL"
 # Music's own quality, which nothing syncs: Recyclarr has no Lidarr support and
 # TRaSH no Lidarr data, so this is the one library configured from a community
-# guide by hand. After the dubbed twins only because it shares the cf_* helpers
-# and they are simpler to follow read top to bottom.
+# guide by hand. After the film and series profiles only because it shares the
+# cf_* helpers and they are simpler to follow read top to bottom.
 configure_lidarr_formats
 configure_spotweb
 configure_allow_unknown "$SONARR_URL"

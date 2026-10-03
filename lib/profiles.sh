@@ -5,8 +5,9 @@
 # Quality itself belongs to Recyclarr (lib/recyclarr.sh): the definitions, the
 # custom-format collection and the four profiles per app come from the TRaSH
 # Guides and are re-synced on a schedule. What lives here is what the guides do
-# not cover: a dubbed twin of every profile, which profile is the default, and
-# the guards against fakes, cams, screeners and upscales.
+# not cover: which profile is the default, the guard against a release that puts
+# a foreign audio track first, and the guards against fakes, cams, screeners and
+# upscales.
 
 # ---------------------------------------------------------------- the plan
 # MEDIA_QUALITY names the default of the four the guides build:
@@ -34,7 +35,7 @@ quality_plan() {
   # Seerr asks with the default unless .env names a profile itself.
   SEERR_QUALITY_PROFILE=${SEERR_QUALITY_PROFILE:-$(recyclarr_profile radarr "$Q_DEFAULT")}
   ok "default $Q_DEFAULT: \"$(recyclarr_profile radarr "$Q_DEFAULT")\" in Radarr, \"$(recyclarr_profile sonarr "$Q_DEFAULT")\" in Sonarr"
-  ok "the other three stay available per title${DUB_CODE:+, all four preferring $(dub_name "$DUB_CODE") beside the original audio}"
+  ok "the other three stay available per title"
 }
 
 # ---------------------------------------------------------------- custom formats
@@ -57,16 +58,30 @@ cf_post() {                       # cf_post BODY -> id
   printf '%s' "$id"
 }
 cf_title() {                      # cf_title NAME REGEX -> id
-  local id
-  id=$(jq -r --arg n "$1" 'first(.[] | select(.name == $n)) | .id // empty' <<<"$CF_FMT")
-  if [[ -n "$id" ]]; then skip "custom format \"$1\"" >&2; printf '%s' "$id"; return; fi
-  id=$(cf_post "$(jq -c --arg n "$1" --arg re "$2" '
+  # Converges on the regex rather than merely creating the format, the same way
+  # cf_language converges on its language list. Without that, a format whose
+  # pattern this stack later changes would keep the pattern it was born with for
+  # ever while configure.sh reported "kept" - a silent non-convergence.
+  local id current wanted shape
+  wanted=$(jq -c --arg n "$1" --arg re "$2" '
     {name:$n, includeCustomFormatWhenRenaming:false,
      specifications:[ first(.[] | select(.implementation == "ReleaseTitleSpecification"))
        | del(.presets, .infoLink, .implementationName)
        | .name = $n | .negate = false | .required = true
-       | .fields |= map(if .name == "value" then .value = $re else . end) ]}' <<<"$CF_SCHEMA")")
-  ok "custom format \"$1\"" >&2
+       | .fields |= map(if .name == "value" then .value = $re else . end) ]}' <<<"$CF_SCHEMA")
+  current=$(jq -c --arg n "$1" 'first(.[] | select(.name == $n)) // empty' <<<"$CF_FMT")
+  if [[ -z "$current" ]]; then
+    id=$(cf_post "$wanted"); ok "custom format \"$1\"" >&2; printf '%s' "$id"; return
+  fi
+  id=$(jq -r .id <<<"$current")
+  # Compare the pattern itself, not the schema noise around it.
+  shape='[.specifications[] | .fields[] | select(.name == "value") | .value]'
+  if [[ "$(jq -c "$shape" <<<"$current")" == "$(jq -c "$shape" <<<"$wanted")" ]]; then
+    skip "custom format \"$1\"" >&2
+  else
+    arr "$CF_KEY" PUT "$CF_URL/api/$CF_V/customformat/$id" "$(jq -c --argjson i "$id" '.id = $i' <<<"$wanted")" >/dev/null
+    ok "custom format \"$1\" (pattern brought in line)" >&2
+  fi
   printf '%s' "$id"
 }
 cf_language() {                   # cf_language NAME '[LANGUAGE_ID, ...]' -> id
@@ -170,224 +185,151 @@ configure_lidarr_formats() {
   return 0
 }
 
-# ---------------------------------------------------------------- dubbed audio
-# One file carrying the original audio and DUB_LANGUAGE, in the ordinary
-# library. No second profile, no second root folder, no second Plex library.
+# ---------------------------------------------------------------- foreign-first audio
+# A release that puts another language's audio in track 1 is not merely untidy:
+# it is what makes Plex freeze on a Tizen TV. The TV can only ever play the
+# first audio track, so asking for any other one forces Plex to transcode the
+# audio while passing the video through, and that combination is an unfixed
+# Plex-for-Samsung defect - see the Plex entry under Traps in AGENTS.md.
 #
-# This follows TRaSH's own [French MULTi.VO] profiles. Those exist for French
-# and German and for no other language - the guides ship no Dutch language
-# format at all - so the two formats in dub_formats are ours and the shape
-# around them is theirs:
+# Measured on this library's own grab history (350 distinct release titles in
+# Radarr's /api/v3/history, probed against the files Jellyfin reports): 31 films
+# hold an English track that is not track 1, 27 of them said so in the release
+# title, and the guides' own guards reject 3. The two that should have caught
+# them both miss for structural reasons, which is why this matches the raw title:
 #
-#   - Bluray is folded into the WEB group at the same resolution. Quality rank
-#     beats custom-format score, so without the merge a preference could never
-#     pick a multi-language WEB-DL over an English-only Bluray - and the
-#     multi-language masters are streaming rips. Remux stays above the group.
-#   - "Language: Not Original" scores -10000, so a release that dropped the
-#     original audio is refused. That is what keeps English in the file. The
-#     format and the score are the guides' own and Recyclarr syncs both; only
-#     the group that carries it is asked for here.
-#   - The dub formats score +500: a preference, never a requirement.
-#     minFormatScore stays at the guide's 0, so a film with no dub available
-#     downloads exactly as it did before.
+#   - "Language: Not Original" goes silent whenever English is present at all.
+#     An iTA-ENG release parses as [Italian, English], so nothing is "not
+#     original" about it - Radarr has no concept of track *order*.
+#   - "Bad Dual Groups" anchors on the *parsed* release group, and a repackager
+#     rewrites that: "x264-iFT_EniaHD" parses as group "iFT", so three Russian
+#     re-uploads came in as Tier 02 Blurays at +1750. The tag survives in the
+#     title string, never in the parsed group.
 #
-# See README "Dubbed audio (the original language plus one more)".
-DUB_SCORE=500
-# The most an existing file can gain from this change is the dub (500) plus the
-# spread across the guides' release-group tiers (1800 down to 1600). Demanding
-# more than that before an upgrade means nothing already on disk is re-grabbed
-# just to pick up a second audio track, while a file sitting on a -10000
-# penalty still upgrades, because that gain is far larger.
-DUB_UPGRADE_FLOOR=$(( DUB_SCORE + 201 ))
-# DUB_REPLACE_EXISTING drops that floor to the dub's own score, so a release
-# that merely adds the second audio track is reason enough to replace a file
-# already on disk. Off by default because it re-downloads the library a title at
-# a time for an audio track, which is a lot of traffic for a small gain - but it
-# is the only automatic way to get the dub onto what is already there, and with
-# the download clients held to one job each the disk stays bounded while it
-# works through. It only reaches releases that *name* the language: a plain
-# MULTi or DUAL scores nothing, because nothing in the title says what is inside.
-[[ "${DUB_REPLACE_EXISTING:-false}" == true ]] && DUB_UPGRADE_FLOOR=$DUB_SCORE
+# Only patterns that earned their place against those 350 titles are here:
+# FOREIGN-ENG pairs and EniaHD and the French markers each matched 8, 3 and 2
+# releases with no false positives, and [Esp] matched 6 of which 5 were
+# genuinely foreign-first. DUAL (4 of 6) and MULTi (6 of 9) are deliberately
+# out: both are too loose to block on, and MULTi says only that a release holds
+# several audio tracks, never which or in what order.
+FOREIGN_FIRST_NAME='Foreign Audio First (title)'
+# A hard block, matching the guides' own -10000 rather than a mere penalty: a
+# file that freezes on the only TV in the house is not a worse copy, it is an
+# unplayable one. minFormatScore stays at the guide's 0, so this rejects rather
+# than deprioritises.
+FOREIGN_FIRST_SCORE=-10000
+# Tags that name a language *before* ENG, in the order the track list follows.
+FOREIGN_FIRST_PAIR='ITA FRE FRENCH GER GERMAN SPA ESP SPANISH RUS RUSSIAN POR TUR JAP KOR HIN POL CAT CZE HUN UKR'
+# Tags that say it on their own, without naming English after it.
+FOREIGN_FIRST_SOLO='TRUEFRENCH VFF VFQ VOSTFR'
 
-configure_dub_preference() {      # configure_dub_preference APP URL
-  local app=$1 url=$2 v
-  log "$app - quality profiles and the default"
-  cf_begin "$app" "$url"
-  if [[ -n "$DUB_CODE" ]]; then
-    dub_formats "$url"
-    for v in $QUALITY_VARIANTS; do
-      dub_prefer "$(recyclarr_profile "$app" "$v")"
-    done
-    retire_dub_twins "$app" "$url"
-  fi
-  move_to_managed_profile "$app" "$url"
+# Dutch is deliberately absent from both lists above, and this is the one place
+# that matters: a .DUTCH. release carries the Dutch track for the children, and
+# the one such release whose tracks have been probed here put English first
+# anyway. Blocking it would refuse exactly the content that is wanted. The guard
+# is about a *foreign* language displacing English, not about a second track
+# existing.
+foreign_first_regex() {
+  local pair='' solo='' t
+  for t in $FOREIGN_FIRST_PAIR; do pair+="${pair:+|}$t"; done
+  for t in $FOREIGN_FIRST_SOLO; do solo+="${solo:+|}$t"; done
+  # [Esp] is a bracketed source tag rather than a language the parser reads, and
+  # EniaHD names no language at all - it is a re-upload tag, and all three in
+  # this library's history were Russian-first.
+  printf '%s' "\b(${pair})[-. ]?ENG\b|\b(${solo})\b|EniaHD|\[Esp\]"
 }
 
-# The two formats that recognise the language: the one the parser reports, and
-# the spellings it leaves as Unknown (NLD, "NL Gesproken"). Either one matching
-# is enough. Deliberately without the bare language word, which the language
-# format already covers and which would also match a film called "The Dutch
-# Job". Sets DUB_IDS.
-dub_formats() {                   # dub_formats URL
-  local url=$1 lang langs known ids audio title regex name
-  lang=$(dub_name "$DUB_CODE")
-  [[ -n "$lang" ]] || die "DUB_LANGUAGE=$DUB_CODE is not one of the codes this script knows (see .env.example)"
-  known=$(arr "$CF_KEY" GET "$url/api/v3/language")
-  langs=$(dub_languages "$DUB_CODE")
-  ids='[]'
-  while IFS= read -r name; do
-    [[ -n "$name" ]] || continue
-    local one
-    one=$(jq -r --arg l "$name" 'first(.[] | select(.name == $l)) | .id // empty' <<<"$known")
-    # A regional variant the app does not carry is simply left out.
-    [[ -n "$one" ]] && ids=$(jq -c --argjson i "$one" '. + [$i]' <<<"$ids")
-  done <<<"$langs"
-  [[ "$ids" != "[]" ]] || die "$CF_APP does not know the language \"$lang\""
-  audio=$(cf_language "$lang Audio" "$ids")
-  regex=$(dub_title_regex "$DUB_CODE")
-  if [[ -n "$regex" ]]; then title=$(cf_title "$lang Dub (title)" "$regex"); fi
-  # MULTi is deliberately NOT scored. The tag says a release carries several audio
-  # tracks, not which, and measured here it does not carry Dutch: three MULTi grabs
-  # in a row on 2026-10-02 came back French. Shaun the Sheep arrived as
-  # "Shaun.Le.Mouton...MELBA" and cost a 12.3 GiB 4K file to deliver audio nobody in
-  # this house speaks; the 1080p MULTi candidates for the sampled films carried VFF,
-  # VFQ or Truefrench markers.
-  #
-  # It is also one of the two things that break 4K playback on a Tizen TV. A MULTi
-  # release puts another language first, the TV can only ever play the first audio
-  # track, and Plex then freezes trying to transcode around it - see the Plex entry
-  # under Traps.
-  #
-  # What remains reaches less and tells the truth: the two formats above match
-  # releases that *name* the language, in the title or in the language field.
-  # Measured for this library, 35 of 99 animation films have a 1080p release naming
-  # Dutch against 9 at 2160p, where the current library carries only 5.
-  DUB_IDS=$(jq -cn --argjson a "$audio" --arg t "${title:-}" \
-    '[$a] + (if $t == "" then [] else [($t|tonumber)] end)')
+# Formats this stack once scored and no longer does. The Recyclarr configs set
+# reset_unmatched_scores: false, so a score written once is never cleared by a
+# later sync - deleting the code that set it leaves the number behind for ever.
+# MULTi sat at 500 for days exactly that way. So anything given up has to be
+# unset *explicitly*, and has to stay on this list: an install still carrying the
+# old score may be upgraded long after the code that wrote it went.
+#
+# "Language: Not Original" is the one that matters. It scores -10000 on any
+# release whose parsed language is not the film's own, which refuses every
+# Dutch-dubbed release there is - 40 of 40 live ones measured through
+# /api/v3/parse - and those are wanted here, for the children. It is also not
+# requested by any profile template this stack uses; it arrived only because
+# lib/recyclarr-config.py asked for its group by name, and that request is gone.
+# The format is the guide's own definition and is left in place merely unscored,
+# rather than deleted, because removing a format the guide defines invites it
+# back on some later sync.
+#
+# The accessibility blocks (WiTH AD / ASL / BASL / BSL) are deliberately NOT
+# here. They stay at -10000: an accessibility release carries a narration of what
+# is on screen *instead of* the normal audio, nothing downstream can repair it,
+# and eighteen such files once sat in this library looking perfectly ordinary.
+UNSCORED_FORMATS='Language: Not Original
+MULTi'
+
+# One format, several title conditions. They are all ReleaseTitleSpecification,
+# so they OR - which is what is wanted here, and is also why they cannot be
+# split across formats without turning the whole thing into an AND.
+foreign_first_guard() {           # foreign_first_guard APP
+  local app=$1 id v
+  id=$(cf_title "$FOREIGN_FIRST_NAME" "$(foreign_first_regex)")
+  for v in $QUALITY_VARIANTS; do
+    our_scores "$(recyclarr_profile "$app" "$v")" "$id"
+  done
 }
 
-# Only the three scores. The quality merge is written into Recyclarr's own
-# config instead (lib/recyclarr-config.py), because Recyclarr syncs nightly and
-# puts a hand-merged profile straight back. Scores are the opposite case:
-# reset_unmatched_scores is false in the configs it writes, so a score for a
-# format it does not know survives its sync, and these are ours.
-dub_prefer() {                    # dub_prefer GUIDE_PROFILE
-  local base=$1 profiles current wanted id
+# Every score this stack owns in one profile, in one PUT: the foreign-first guard
+# at -10000 and everything on UNSCORED_FORMATS back to 0. One pass rather than
+# one per format, so a profile is read and written once and the log carries one
+# line per profile instead of four.
+our_scores() {                    # our_scores GUIDE_PROFILE GUARD_FORMAT_ID
+  local base=$1 fid=$2 profiles current wanted id zeros
   profiles=$(arr "$CF_KEY" GET "$CF_URL/api/v3/qualityprofile")
   current=$(jq -c --arg n "$base" 'first(.[] | select(.name == $n)) // empty' <<<"$profiles")
   [[ -n "$current" ]] || die "Recyclarr has not created the profile \"$base\" in $CF_APP yet"
   id=$(jq -r .id <<<"$current")
-  # Only the dub formats. "Language: Not Original" is the guides' own and
-  # Recyclarr now syncs it, score included, through the [Optional] Language
-  # Profiles group in lib/recyclarr-config.py - so setting it here as well would
-  # be two owners for one number.
-  # MULTi is zeroed rather than merely left unscored. This section only writes the
-  # scores it wants, and the Recyclarr configs set reset_unmatched_scores: false, so
-  # a score written here once survives for ever: MULTi sat at 500 from an earlier run
-  # and no amount of re-running cleared it. Anything this stack has scored and since
-  # changed its mind about has to be set back explicitly, or configure.sh cannot
-  # converge on an install that ran the older version.
-  local zero
-  zero=$(jq -r --arg n "MULTi" 'first(.[] | select(.name == $n)) | .id // empty' <<<"$CF_FMT")
-  wanted=$(jq -c --argjson dub "$DUB_IDS" --argjson s "$DUB_SCORE" --arg z "${zero:-}" '
-    ($z | if . == "" then -1 else tonumber end) as $zid
-    | .formatItems |= map(
-        if (.format as $i | $dub | index($i)) then .score = $s
-        elif .format == $zid then .score = 0
-        else . end)' <<<"$current")
+  # A profile that does not carry the guard at all would make the map below a
+  # no-op, and the comparison would then report "kept" for a score that was never
+  # written - the silent-skip failure this repo keeps being bitten by. Only the
+  # guard is checked: a name on UNSCORED_FORMATS may legitimately be absent,
+  # because the format is only there at all on an install that once scored it.
+  jq -e --argjson f "$fid" 'any(.formatItems[]; .format == $f)' <<<"$current" >/dev/null \
+    || die "$CF_APP profile \"$base\" does not list custom format $fid"
+  zeros=$(jq -Rsc '[splits("\n")] | map(select(length > 0))' <<<"$UNSCORED_FORMATS")
+  wanted=$(jq -c --argjson f "$fid" --argjson s "$FOREIGN_FIRST_SCORE" --argjson z "$zeros" '
+    .formatItems |= map(
+      if .format == $f then .score = $s
+      elif (.name as $n | $z | index($n)) then .score = 0
+      else . end)' <<<"$current")
   if [[ "$(jq -cS . <<<"$wanted")" == "$(jq -cS . <<<"$current")" ]]; then
-    skip "quality profile \"$base\""
+    skip "quality profile \"$base\" scores"
   else
     arr "$CF_KEY" PUT "$CF_URL/api/v3/qualityprofile/$id" "$wanted" >/dev/null
-    ok "quality profile \"$base\" prefers $(dub_name "$DUB_CODE") beside the original audio"
+    ok "quality profile \"$base\" scores (foreign-first refused, given-up formats back to 0)"
   fi
 }
 
-# The twins this stack used to build, and the root folder they wrote to. Both
-# are gone; whatever still points at one is moved onto the ordinary profile
-# before the twin is deleted. Idempotent: on a stack that never had them, or on
-# a second run, there is nothing to find.
-#
-# Two things make this less obvious than it looks. A film that lives in another
-# root folder - the archive tier - keeps the folder it has, because relocating
-# it would drag the file back out of the cloud and the mover would then push it
-# up again. And in Radarr a **collection** carries a quality profile of its own,
-# so a twin with no film left on it is still "in use" and the delete answers
-# 500 until the collections are repointed too.
-retire_dub_twins() {              # retire_dub_twins APP URL
-  local app=$1 url=$2 resource=movie label=films profiles twins target name
-  local root nlroot here elsewhere editor count folders id fid cols
-  [[ "$app" == sonarr ]] && { resource=series; label=series; }
-  profiles=$(arr "$CF_KEY" GET "$url/api/v3/qualityprofile")
-  twins=$(jq -c --arg s " (${DUB_CODE^^}-DUB)" '[.[] | select(.name | endswith($s)) | .id]' <<<"$profiles")
-  [[ "$(jq length <<<"$twins")" != 0 ]] || { skip "no ${DUB_CODE^^}-DUB twins left to retire"; return 0; }
-  name=$(recyclarr_profile "$app" "$Q_DEFAULT")
-  target=$(jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | .id' <<<"$profiles")
-  [[ -n "$target" && "$target" != null ]] || die "Recyclarr has not created the profile \"$name\" in $app yet"
-  case $app in
-    radarr) root=/data/media/movies ;;
-    sonarr) root=/data/media/tv ;;
-  esac
-  nlroot="${root}-$DUB_CODE"
-
-  # Split by where the title actually lives: only the ones inside the retired
-  # root are relocated, and moveFiles lets the app do the move itself so the
-  # database and the disk cannot disagree.
-  here=$(arr "$CF_KEY" GET "$url/api/v3/$resource" | jq -c --argjson t "$twins" --arg r "$nlroot" \
-         '[.[] | select(.qualityProfileId as $p | $t | index($p)) | select(.path | startswith($r)) | .id]')
-  elsewhere=$(arr "$CF_KEY" GET "$url/api/v3/$resource" | jq -c --argjson t "$twins" --arg r "$nlroot" \
-         '[.[] | select(.qualityProfileId as $p | $t | index($p)) | select(.path | startswith($r) | not) | .id]')
-  count=$(jq length <<<"$here")
-  if (( count )); then
-    editor=$(jq -cn --argjson ids "$here" --argjson p "$target" --arg r "$root" --arg k "${resource}Ids" \
-             '{($k): $ids, qualityProfileId: $p, rootFolderPath: $r, moveFiles: true}')
-    arr "$CF_KEY" PUT "$url/api/v3/$resource/editor" "$editor" >/dev/null
-    ok "moved $count $label out of $nlroot into $root, onto \"$name\""
-  fi
-  count=$(jq length <<<"$elsewhere")
-  if (( count )); then
-    editor=$(jq -cn --argjson ids "$elsewhere" --argjson p "$target" --arg k "${resource}Ids" \
-             '{($k): $ids, qualityProfileId: $p}')
-    arr "$CF_KEY" PUT "$url/api/v3/$resource/editor" "$editor" >/dev/null
-    ok "moved $count $label onto \"$name\", each keeping the root folder it is in"
-  fi
-
-  # Radarr only: a collection holds a profile too, and holds the twin open.
-  if [[ "$app" == radarr ]]; then
-    cols=$(arr "$CF_KEY" GET "$url/api/v3/collection" \
-           | jq -c --argjson t "$twins" '[.[] | select(.qualityProfileId as $p | $t | index($p))]')
-    count=$(jq length <<<"$cols")
-    if (( count )); then
-      for id in $(jq -r '.[].id' <<<"$cols"); do
-        arr "$CF_KEY" PUT "$url/api/v3/collection/$id" \
-          "$(jq -c --argjson i "$id" --argjson p "$target" \
-             'first(.[] | select(.id == $i)) | .qualityProfileId = $p' <<<"$cols")" >/dev/null
-      done
-      ok "repointed $count collection(s) onto \"$name\""
-    fi
-  fi
-
-  for id in $(jq -r '.[]' <<<"$twins"); do
-    arr "$CF_KEY" DELETE "$url/api/v3/qualityprofile/$id" >/dev/null 2>&1 \
-      && ok "removed the twin $(jq -r --argjson i "$id" 'first(.[] | select(.id == $i)) | .name' <<<"$profiles")" \
-      || ok "the twin $(jq -r --argjson i "$id" 'first(.[] | select(.id == $i)) | .name' <<<"$profiles") is still in use - left in place"
-  done
-  # The root folder the twins wrote to goes with them.
-  folders=$(arr "$CF_KEY" GET "$url/api/v3/rootfolder")
-  fid=$(jq -r --arg p "$nlroot" 'first(.[] | select(.path == $p)) | .id // empty' <<<"$folders")
-  if [[ -n "$fid" ]]; then
-    arr "$CF_KEY" DELETE "$url/api/v3/rootfolder/$fid" >/dev/null 2>&1 \
-      && ok "removed the root folder $nlroot"
-  fi
-  return 0
+# The profiles themselves are Recyclarr's; what is left to do per app is score
+# the one format of ours and move anything off a profile nobody should be using.
+# This stack used to add a dubbed twin of every profile here, with its own root
+# folder and its own Seerr destination, and later a pair of Dutch custom formats
+# scored +500 in the ordinary profiles instead. Both are gone: a dub preference
+# cannot reach releases whose title does not name the language, and the guide
+# format that was keeping the original audio in the file refused every Dutch
+# release there is - 40 of 40 measured live. Dutch now arrives by asking for a
+# .DUTCH. release in an interactive search, and the children hear it through
+# Jellyfin, whose per-user audio preference picks the track whatever position it
+# sits in. See README "Dutch audio, and why nothing scores for it".
+configure_profiles() {            # configure_profiles APP URL
+  local app=$1 url=$2
+  log "$app - quality profiles and the default"
+  cf_begin "$app" "$url"
+  foreign_first_guard "$app"
+  move_to_managed_profile "$app" "$url"
 }
 
 # Films and series sitting on a profile nobody should be using are moved onto
 # the default - that is what makes it the default, including for anything added
 # through the app's own UI. Two kinds count: the apps' own stock profiles, and
 # the ones this stack managed itself before the guides took over, which are
-# deleted once nothing points at them. Put something on a profile of your own,
-# or on a dubbed twin, and it stays there.
+# deleted once nothing points at them. Put something on a profile of your own
+# and it stays there.
 Q_RETIRED='["HD-1080p Encode","1080p Encode","1080p Remux","2160p Encode","2160p Remux"]'
 
 move_to_managed_profile() {       # move_to_managed_profile APP URL
