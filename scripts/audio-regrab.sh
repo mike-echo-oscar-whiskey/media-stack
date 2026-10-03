@@ -295,6 +295,11 @@ while :; do
       free=$(free_gib); flight=$(in_flight)
       (( free > WARN )) && (( flight < MAX_INFLIGHT )) && break
       log "holding: free ${free} GiB (warn $WARN), $flight of $MAX_INFLIGHT in flight - pushing to the cloud"
+      # Inside the hold, not only outside it. A mover run drains uploads and can take
+      # a quarter of an hour, and a download that completed meanwhile would otherwise
+      # sit unimported for all of it - occupying the very disk the mover is trying to
+      # free, and counting against the in-flight cap it is waiting on.
+      force_stuck_imports
       ./mover.sh >/dev/null 2>&1 || log "  mover declined or failed; will retry"
       sleep "$POLL"
     done
