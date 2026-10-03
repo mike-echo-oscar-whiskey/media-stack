@@ -1107,6 +1107,37 @@ Two more things decide whether a client on the LAN really connects directly:
   "plex.direct"`, dnsmasq `rebind-domain-ok=/plex.direct/`. Check from any LAN device with
   `dig <name>.plex.direct` — an empty answer means the resolver is stripping it.
 
+### What each person hears
+
+`users.json` also carries an **audio** and a **subtitles** language per person, and both servers
+are given it — so a child who cannot read yet gets the Dutch track selected for them rather than
+having to change it on every film.
+
+| | Jellyfin | Plex |
+|---|---|---|
+| Field written | `AudioLanguagePreference`, `SubtitleLanguagePreference`, `PlayDefaultAudioTrack: false` | `defaultAudioLanguage`, `defaultSubtitleLanguage` on the account |
+| Code spelling | ISO 639-2 (`nld`), as the file carries it | ISO 639-1 (`nl`), converted by `iso639_1` |
+| Endpoint | the Jellyfin user API | `PUT /accounts/<id>` on the **local** server |
+
+The Plex half is worth a note, because the neighbouring setting behaves differently. The age
+restriction has no API at all and `configure.sh` can only report a disagreement with the file and
+leave it; the language *is* settable, through the local server rather than plex.tv, so the token
+already in hand is enough.
+
+Two details that look like bugs and are not:
+
+- **A name can match more than one Plex account.** This server carries two rows called `Zev` and
+  a dozen with no name at all. Every row whose name is in the file is set — which converges either
+  way — and the nameless rows are left alone.
+- **No `subtitles` in a person's entry means no opinion, not "none".** A child too young to read
+  has the field left out, and whatever Plex holds is left alone rather than being forced to a
+  language they will not see.
+
+Selecting a non-first audio track makes Plex transcode the audio on a Samsung TV, which is the
+path that can freeze (see *Traps* in `AGENTS.md`). Setting the preference does not avoid that — it
+moves the track change from mid-stream, which is the worst moment for it, to the start of playback.
+Jellyfin remuxes a single-track container instead and is unaffected.
+
 ### Who sees which library
 
 `users.json` — the same file Jellyfin's accounts come from (section [Jellyfin alongside Plex](#17-jellyfin-alongside-plex)) — also

@@ -44,6 +44,70 @@ plex_online_sources_off() {         # plex_online_sources_off TOKEN
 #   Age restriction no. /api/v2/home/users/<id> answers 405 to GET, PUT and
 #                   POST alike and nothing documented sets restrictionProfile,
 #                   so this reports a disagreement with the file and leaves it.
+# Plex keeps a default audio and subtitle language per account and selects the
+# matching track by itself. Every account here sat on English, so a child playing
+# a .DUTCH. release got the English track and had to change it by hand on each
+# film - which is also the worst moment to do it on a Tizen set, because changing
+# track mid-stream forces Plex to transcode the audio and that is the path that
+# freezes (see the Plex entry under Traps in AGENTS.md).
+#
+# users.json already carries the answer per person, because Jellyfin needs it.
+# This hands the same answer to Plex in the spelling Plex takes: ISO 639-1, where
+# the file is 639-2 because that is what Jellyfin stores.
+#
+# Unlike the age restriction, which has no API at all and is only reported,
+# this one is settable - PUT /accounts/<id> with the values as query parameters
+# answers 200 and they stick. It is the local server, not plex.tv, so the token
+# already in hand is enough.
+#
+# A name can match more than one account: this server carries two rows called
+# "Zev" and a dozen with no name at all. Every row matching a name in the file is
+# set, which converges either way, and the nameless rows are left alone.
+plex_user_languages() {             # plex_user_languages TOKEN
+  local token=$1 file accounts line id name cur_a cur_s want_a want_s args
+  local changed=0 kept=0 missing=''
+  file=$(family_file) || return 0
+  accounts=$(curl -fsS -m 15 -H "X-Plex-Token: $token" "$PLEX_URL/accounts" 2>/dev/null) || {
+    echo "   WARN Plex did not list its accounts; languages left alone"; return 0; }
+  # XML, so it is read by python rather than jq. Tab-separated, and a name with a
+  # space in it survives because the name is the last field.
+  while IFS=$'\t' read -r id cur_a cur_s name; do
+    [[ -n "${name:-}" ]] || continue
+    want_a=$(jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | .audio // empty' "$file")
+    want_s=$(jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | .subtitles // empty' "$file")
+    [[ -n "$want_a$want_s" ]] || continue
+    args=''
+    if [[ -n "$want_a" ]]; then
+      want_a=$(iso639_1 "$want_a")
+      [[ "$want_a" == "$cur_a" ]] || args+="&defaultAudioLanguage=$(urlenc "$want_a")"
+    fi
+    # No subtitles named in the file means no opinion, not "none": a child too
+    # young to read has the field left out and whatever Plex holds is left alone.
+    if [[ -n "$want_s" ]]; then
+      want_s=$(iso639_1 "$want_s")
+      [[ "$want_s" == "$cur_s" ]] || args+="&defaultSubtitleLanguage=$(urlenc "$want_s")"
+    fi
+    if [[ -z "$args" ]]; then kept=$(( kept + 1 )); continue; fi
+    if curl -fsS -m 15 -o /dev/null -X PUT -H "X-Plex-Token: $token" \
+         "$PLEX_URL/accounts/$id?${args#&}"; then
+      ok "Plex: $name plays ${want_a:-$cur_a} audio${want_s:+, ${want_s} subtitles}"
+      changed=$(( changed + 1 ))
+    else
+      missing+=" $name"
+    fi
+  done < <(python3 -c '
+import sys, xml.etree.ElementTree as E
+r = E.fromstring(sys.stdin.read())
+for a in r.iter("Account"):
+    n = a.get("name") or ""
+    print("\t".join([a.get("id") or "", a.get("defaultAudioLanguage") or "",
+                     a.get("defaultSubtitleLanguage") or "", n]))
+' <<<"$accounts")
+  (( changed )) || skip "Plex audio and subtitle language for $kept account(s)"
+  [[ -z "$missing" ]] || printf '   WARN Plex refused the language change for:%s\n' "$missing"
+  return 0
+}
+
 plex_user_libraries() {             # plex_user_libraries TOKEN
   local token=$1 file mid hdr=() home shares plan line kind arg ids name libs changed=0 kept=0
   file=$(family_file) || { echo "        (no users.json: Plex library access left alone)"; return 0; }
@@ -241,4 +305,5 @@ configure_plex() {
   curl -fsS -o /dev/null -X PUT "${auth[@]}" "$PLEX_URL/myplex/refreshReachability" 2>/dev/null || true
   plex_online_sources_off "$token"
   plex_user_libraries "$token"
+  plex_user_languages "$token"
 }

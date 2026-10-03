@@ -385,13 +385,22 @@ Each of these cost a debugging session, and none can be read off the code.
   the API does not report remaining headroom, so do not start work that fills the disk until a
   `Copied` line appears in the log again.
 
-- **Plex freezes on a Samsung TV whenever it transcodes audio while passing video through,
-  and no server-side setting fixes it.** Tizen 6 and higher cannot select an audio track at
-  all - the TV always plays the *first* one - so asking for any other track forces Plex to
-  transcode the audio, and video-direct-plus-audio-transcode is an unfixed Plex-for-Samsung
-  bug: it plays for a minute or two, then stops for good with `range could not be satisfied`
-  repeating in the player log. Reported to Plex in January 2024, never acknowledged, still
-  present. Jellyfin is unaffected because it remuxes a container holding only the wanted
+- **Plex on a Samsung TV is unreliable - not unusable - when it transcodes audio while passing
+  video through.** Tizen 6 and higher cannot select an audio track at all: the TV always plays
+  the *first* one, so asking for any other track forces Plex to transcode the audio. That
+  combination is an unfixed Plex-for-Samsung bug, reported in January 2024 and never
+  acknowledged, and when it bites it plays for a minute or two then stops for good with
+  `range could not be satisfied` repeating in the player log.
+
+  **It does not always bite, and the first version of this entry was wrong to say it does.**
+  On 2026-10-03 `Encanto` - DTS-HD MA English on track 1, Dutch AC3 on track 2 - played for
+  over an hour on exactly that path: `video=copy audio=transcode`, `dca -> aac` for an adult
+  and `ac3 -> aac` for a child on the *second* track, at a measured 0.99 of realtime, through
+  four seeks and several chapter jumps, with no freeze. The night before, releases of the same
+  shape froze within minutes and a seek killed one outright. So it is intermittent. The honest
+  rule: prefer a path with no audio transcode, but do not call a file broken because it needs
+  one, and do not call the bug fixed because one file survived. Judge a specific file by
+  playing it, and judge it by whether the position advances. Jellyfin is unaffected because it remuxes a container holding only the wanted
   track and copies both streams - `IsVideoDirect: true, IsAudioDirect: true` at 9 percent CPU
   where Plex re-encodes EAC3 to AAC.
 

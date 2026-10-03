@@ -80,6 +80,20 @@ PY
 # Host-side URLs (published ports) and the names the apps use for each other.
 # qBittorrent lives in Gluetun's network namespace
 # and is reached under Gluetun's name.
+# The other direction. users.json carries ISO 639-2 because Jellyfin stores it
+# that way, and Plex wants ISO 639-1 on an account's default language - so the
+# family file is written once and each server is handed the spelling it takes.
+iso639_1() {                     # iso639_1 nld -> nl   (Plex accounts store ISO 639-1)
+  case "${1,,}" in
+    nld|dut) echo nl ;; eng) echo en ;; deu|ger) echo de ;; fra|fre) echo fr ;;
+    spa) echo es ;; ita) echo it ;; por) echo pt ;; swe) echo sv ;; dan) echo da ;;
+    nor) echo no ;; fin) echo fi ;; pol) echo pl ;; tur) echo tr ;; jpn) echo ja ;;
+    zho|chi) echo zh ;; kor) echo ko ;; rus) echo ru ;; ces|cze) echo cs ;;
+    # Already two letters, or a code this list does not know: hand it back as it
+    # came rather than inventing one. Plex ignores a language it cannot match.
+    *) echo "${1,,}" ;;
+  esac
+}
 iso639_2() {                     # iso639_2 nl -> nld   (Jellyfin stores ISO 639-2 codes)
   case "${1,,}" in
     nl) echo nld ;; en) echo eng ;; de) echo deu ;; fr) echo fra ;; es) echo spa ;; it) echo ita ;;
