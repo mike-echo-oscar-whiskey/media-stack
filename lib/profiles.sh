@@ -112,6 +112,45 @@ cf_language() {                   # cf_language NAME '[LANGUAGE_ID, ...]' -> id
   fi
   printf '%s' "$id"
 }
+cf_source() {                     # cf_source NAME SOURCE_NAME[,SOURCE_NAME...] -> id
+  # One condition per source, OR-ed (same implementation, required false). The
+  # option is resolved by *name* from the app's own schema, never by number:
+  # Radarr counts UNKNOWN CAM TELESYNC TELECINE WORKPRINT DVD TV WEBDL WEBRIP
+  # BLURAY where Sonarr counts Unknown Television TelevisionRaw Web WebRip DVD
+  # Bluray BlurayRaw, so WEBDL is 7 in one and nothing at all in the other.
+  local name=$1 want=$2 ids='[]' one id current wanted shape
+  local IFS=,
+  for one in $want; do
+    id=$(jq -r --arg n "$one" '
+      first(.[] | select(.implementation == "SourceSpecification"))
+      | .fields[] | select(.name == "value") | .selectOptions[]
+      | select(.name == $n) | .value // empty' <<<"$CF_SCHEMA")
+    [[ -n "$id" ]] || die "$CF_APP has no release source called \"$one\""
+    ids=$(jq -c --argjson i "$id" '. + [$i]' <<<"$ids")
+  done
+  unset IFS
+  wanted=$(jq -c --arg n "$name" --argjson ids "$ids" '. as $s |
+    {name:$n, includeCustomFormatWhenRenaming:false,
+     specifications:[ $ids[] as $v
+       | first($s[] | select(.implementation == "SourceSpecification"))
+       | del(.presets, .infoLink, .implementationName)
+       | .name = ($v|tostring) | .negate = false | .required = false
+       | .fields |= map(if .name == "value" then .value = $v else . end) ]}' <<<"$CF_SCHEMA")
+  current=$(jq -c --arg n "$name" 'first(.[] | select(.name == $n)) // empty' <<<"$CF_FMT")
+  if [[ -z "$current" ]]; then
+    id=$(cf_post "$wanted"); ok "custom format \"$name\"" >&2; printf '%s' "$id"; return 0
+  fi
+  id=$(jq -r .id <<<"$current")
+  shape='[.specifications[] | .fields[] | select(.name == "value") | .value] | sort'
+  if [[ "$(jq -c "$shape" <<<"$current")" == "$(jq -c "$shape" <<<"$wanted")" ]]; then
+    skip "custom format \"$name\"" >&2
+  else
+    arr "$CF_KEY" PUT "$CF_URL/api/$CF_V/customformat/$id" "$(jq -c --argjson i "$id" '.id = $i' <<<"$wanted")" >/dev/null
+    ok "custom format \"$name\" (sources brought in line)" >&2
+  fi
+  printf '%s' "$id"
+}
+
 # ---------------------------------------------------------------- Lidarr quality
 # Music is the one library nothing syncs. TRaSH has no Lidarr data and says so
 # outright, pointing instead at Davo's community guide, which is itself an index
@@ -260,17 +299,112 @@ foreign_first_regex() {
 # here. They stay at -10000: an accessibility release carries a narration of what
 # is on screen *instead of* the normal audio, nothing downstream can repair it,
 # and eighteen such files once sat in this library looking perfectly ordinary.
+# ---------------------------------------------------------------- audio and source
+# A Samsung Tizen set cannot decode DTS or TrueHD. When the wanted track is one of
+# those Plex transcodes the audio while passing the video through, which is the
+# path that eventually freezes (see the Plex entry under Traps in AGENTS.md).
+# Encanto arrived that way, ran 64 minutes and died.
+#
+# So the scores below prefer what the televisions can actually decode. Measured on
+# this library's own files, by the codec of each film's first audio track:
+#
+#   eac3  186 tracks, median 5.1, up to 7.1, and 44 of the 48 Atmos tracks here
+#   ac3    78 tracks, median 5.1, 5.1 ceiling
+#   dts    41 tracks, median 5.1          <- needs a transcode
+#   aac    37 tracks, median *2.0*        <- plays, but usually stereo
+#   truehd  5 tracks, 7.1                 <- needs a transcode
+#
+# DD+ is the sweet spot rather than a compromise: it is the streaming standard, it
+# carries 7.1, and DD+ Atmos is the one Atmos route a Samsung app passes over eARC
+# to the Sonos Beam. DTS-HD MA and TrueHD are *lossless* and on paper better - but
+# the set cannot decode either, so Plex re-encodes them, and in the Encanto test
+# that came out as AAC. Preferring DD+ trades a lossless track that never plays
+# losslessly for a 7.1 Atmos one that does.
+#
+# AAC is scored barely above nothing because 24 of its 37 tracks here are stereo:
+# worth having over a transcode, not worth losing 5.1 for.
+#
+# DTS, DTS-ES, DTS-HD HRA, DTS-HD MA, DTS X, TrueHD, TrueHD ATMOS, FLAC and PCM are
+# deliberately left at the guide's 0 rather than penalised. minFormatScore is 0, so
+# a penalty would *reject* a film offered only with DTS, and one transcode beats no
+# film at all.
+AUDIO_SCORES='DD+ ATMOS	320
+DD+	280
+DD	200
+AAC	60'
+
+# The audio formats read the release *title*, so they only reach releases that name
+# their codec. Measured against the 196 films here: when a title names a codec it is
+# right 94% of the time, but 36% of titles say nothing at all - and 17 of those 72
+# silent films turned out to carry DTS or TrueHD, Encanto among them. No regex fixes
+# that; the information is absent.
+#
+# Source is the field that is always present, and it correlates: 35 of 98 Bluray
+# files here have DTS or TrueHD on track 1 against 0 of 98 WEB files. So a WEB-DL
+# preference reaches the 36% the codec formats cannot see.
+#
+# 150 is chosen against the guides' release-group tiers, which run 1600-1800 and put
+# HD Bluray 100 above WEB at the same rank. 150 clears that, so a WEB-DL beats a
+# Bluray of equal tier - and a top-tier Bluray still beats a bottom-tier WEB-DL,
+# which is correct. WEBRIP is deliberately not included: it is a re-encode of a
+# stream, 2.2 Mbit/s median here against WEB-DL's 6.8, and promoting it would buy
+# safe audio with a bad picture.
+#
+# Radarr only. Sonarr's profiles are WEB-only by the guide's own design, so there is
+# no Bluray there to out-rank.
+WEB_SOURCE_NAME='WEB-DL Source'
+WEB_SOURCE_SCORE=150
+
 UNSCORED_FORMATS='Language: Not Original
 MULTi'
 
 # One format, several title conditions. They are all ReleaseTitleSpecification,
 # so they OR - which is what is wanted here, and is also why they cannot be
 # split across formats without turning the whole thing into an AND.
-foreign_first_guard() {           # foreign_first_guard APP
-  local app=$1 id v
-  id=$(cf_title "$FOREIGN_FIRST_NAME" "$(foreign_first_regex)")
+# Our scores, per profile. Two maps rather than one, because the guides own the
+# audio hierarchy in the Remux and UHD profiles - TrueHD ATMOS 5000 above DTS X
+# 4500 above DD+ ATMOS 3000 - and that is both a fight this cannot win (Recyclarr
+# restores it on every sync, as the language group did in Sonarr) and the right
+# answer there: a profile called Remux is chosen *for* lossless audio, by someone
+# whose equipment can decode it. So the codec and source preference applies to the
+# default profile only, and the rest get the guard and the zeroes.
+apply_our_scores() {              # apply_our_scores APP
+  local app=$1 v base default common extra name score id
+  default=$(recyclarr_profile "$app" "$Q_DEFAULT")
+  # The guard, by id: it is ours, so nothing else can be relied on to have made it.
+  common="$(cf_title "$FOREIGN_FIRST_NAME" "$(foreign_first_regex)")	$FOREIGN_FIRST_SCORE"$'\n'
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    id=$(jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | .id // empty' <<<"$CF_FMT")
+    [[ -n "$id" ]] && common+="$id	0"$'\n'
+  done <<<"$UNSCORED_FORMATS"
+
+  extra=''
+  if [[ $app == radarr ]]; then
+    # Source is ours, so it is zeroed everywhere it does not belong rather than
+    # merely left out: a score written once survives for ever otherwise.
+    id=$(cf_source "$WEB_SOURCE_NAME" WEBDL)
+    common+="$id	0"$'\n'
+    extra+="$id	$WEB_SOURCE_SCORE"$'\n'
+    # Audio, Radarr only. Sonarr holds none of these: its guide ships them only
+    # inside an `audio-formats` group, and selecting a group hands Recyclarr the
+    # scores too - the fidelity ordering, which is backwards for a television that
+    # cannot decode lossless. Owning private copies of nine formats there is a
+    # bigger change than the gap justifies: 17 of 319 episodes here carry TrueHD on
+    # track 1 against 76% already EAC3, and every series profile is WEB, where DTS
+    # does not appear at all. Revisit if that 17 grows.
+    while IFS=$'\t' read -r name score; do
+      [[ -n "$name" ]] || continue
+      id=$(jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | .id // empty' <<<"$CF_FMT")
+      [[ -n "$id" ]] || die "$CF_APP has no custom format called \"$name\" - the guide renamed it"
+      extra+="$id	$score"$'\n'
+    done <<<"$AUDIO_SCORES"
+  fi
+
   for v in $QUALITY_VARIANTS; do
-    our_scores "$(recyclarr_profile "$app" "$v")" "$id"
+    base=$(recyclarr_profile "$app" "$v")
+    if [[ "$base" == "$default" ]]; then OUR_SCORES="$common$extra"; else OUR_SCORES="$common"; fi
+    our_scores "$base"
   done
 }
 
@@ -278,30 +412,30 @@ foreign_first_guard() {           # foreign_first_guard APP
 # at -10000 and everything on UNSCORED_FORMATS back to 0. One pass rather than
 # one per format, so a profile is read and written once and the log carries one
 # line per profile instead of four.
-our_scores() {                    # our_scores GUIDE_PROFILE GUARD_FORMAT_ID
-  local base=$1 fid=$2 profiles current wanted id zeros
+our_scores() {                    # our_scores GUIDE_PROFILE   (reads OUR_SCORES)
+  local base=$1 profiles current wanted id map
   profiles=$(arr "$CF_KEY" GET "$CF_URL/api/v3/qualityprofile")
   current=$(jq -c --arg n "$base" 'first(.[] | select(.name == $n)) // empty' <<<"$profiles")
   [[ -n "$current" ]] || die "Recyclarr has not created the profile \"$base\" in $CF_APP yet"
   id=$(jq -r .id <<<"$current")
-  # A profile that does not carry the guard at all would make the map below a
-  # no-op, and the comparison would then report "kept" for a score that was never
-  # written - the silent-skip failure this repo keeps being bitten by. Only the
-  # guard is checked: a name on UNSCORED_FORMATS may legitimately be absent,
-  # because the format is only there at all on an install that once scored it.
-  jq -e --argjson f "$fid" 'any(.formatItems[]; .format == $f)' <<<"$current" >/dev/null \
-    || die "$CF_APP profile \"$base\" does not list custom format $fid"
-  zeros=$(jq -Rsc '[splits("\n")] | map(select(length > 0))' <<<"$UNSCORED_FORMATS")
-  wanted=$(jq -c --argjson f "$fid" --argjson s "$FOREIGN_FIRST_SCORE" --argjson z "$zeros" '
-    .formatItems |= map(
-      if .format == $f then .score = $s
-      elif (.name as $n | $z | index($n)) then .score = 0
-      else . end)' <<<"$current")
+  # id -> score, built from the tab-separated lines OUR_SCORES carries.
+  # from_entries keeps the *last* value for a repeated key, which is what makes the
+  # default profile's extra map override the common one for the same format id.
+  map=$(jq -Rsc 'split("\n") | map(select(length > 0) | split("\t"))
+                 | map({key: .[0], value: (.[1]|tonumber)}) | from_entries' <<<"$OUR_SCORES")
+  # A profile that lists none of them would make the map a no-op and the compare
+  # would then report "kept" for scores that were never written - the silent-skip
+  # failure this repo keeps being bitten by.
+  jq -e --argjson m "$map" 'any(.formatItems[]; (.format|tostring) as $f | $m | has($f))' \
+    <<<"$current" >/dev/null || die "$CF_APP profile \"$base\" lists none of our formats"
+  wanted=$(jq -c --argjson m "$map" '
+    .formatItems |= map((.format|tostring) as $f
+      | if ($m | has($f)) then .score = $m[$f] else . end)' <<<"$current")
   if [[ "$(jq -cS . <<<"$wanted")" == "$(jq -cS . <<<"$current")" ]]; then
     skip "quality profile \"$base\" scores"
   else
     arr "$CF_KEY" PUT "$CF_URL/api/v3/qualityprofile/$id" "$wanted" >/dev/null
-    ok "quality profile \"$base\" scores (foreign-first refused, given-up formats back to 0)"
+    ok "quality profile \"$base\" scores (foreign-first refused, audio and source preferred)"
   fi
 }
 
@@ -320,7 +454,7 @@ configure_profiles() {            # configure_profiles APP URL
   local app=$1 url=$2
   log "$app - quality profiles and the default"
   cf_begin "$app" "$url"
-  foreign_first_guard "$app"
+  apply_our_scores "$app"
   move_to_managed_profile "$app" "$url"
 }
 

@@ -43,13 +43,71 @@ MEDIA_NAMING = {
     },
 }
 
-# The quality profiles are the guide's own, untouched. This stack used to fold
-# Bluray into the WEB group at the same resolution so a custom-format score could
-# choose between a Bluray and a WEB release instead of the quality rank deciding -
-# which existed only to let the dub score win. With no dub preference there is
-# nothing for it to decide, so the guide's own ranking and cutoff stand and the
-# whole rewrite is gone. See README "Dutch audio, and why nothing scores for it".
+# Bluray-<res> is folded into the "WEB <res>" group beside it, as TRaSH's own
+# [French MULTi.VO] profiles do, so the two sources rank *equally* and a
+# custom-format score decides between them. In Radarr quality rank is compared
+# before custom-format score, so while Bluray-1080p is a separate higher rank no
+# score can ever prefer a WEB release - and preferring WEB is the point: measured
+# on this library, 35 of 98 Bluray files carry DTS or TrueHD on track 1 against
+# 0 of 98 WEB files, and those are the ones the televisions cannot decode.
+#
+# It also fixes the cutoff. Un-folded, the guide's cutoff is Bluray-1080p, which
+# puts every WEB file *below* cutoff: 98 films here, every one of them an upgrade
+# candidate. Folded, the cutoff is the group and both sources satisfy it.
+#
+# This code was removed when the dub preference went and restored when the audio
+# measurements arrived. The reason has changed completely - it used to exist so a
+# dub score could outrank quality - so do not read the history as precedent.
+# See README "Audio the televisions can decode".
 guides = cache.parents[2] / "trash-guides" / "git" / "official" / "docs" / "json" / app
+guide_profiles: dict = {}
+for f in sorted((guides / "quality-profiles").glob("*.json")):
+    import json as _json
+    d = _json.loads(f.read_text())
+    if d.get("trash_id"):
+        guide_profiles[d["trash_id"]] = d
+
+
+def fold_bluray_into_web(items):
+    """Bluray-<res> joins the "WEB <res>" group beside it. Returns
+    (items, renames) - renames maps a group's old name to its new one, which the
+    cutoff has to follow."""
+    renames: dict[str, str] = {}
+    items = [dict(i) for i in items]
+    resolutions = sorted(
+        m.group(1)
+        for i in items
+        if i.get("allowed") and (m := re.fullmatch(r"WEB (\d+p)", i.get("name", "")))
+    )
+    for res in resolutions:
+        gn, bd = f"WEB {res}", f"Bluray-{res}"
+        group = next((i for i in items if i.get("name") == gn), None)
+        bluray = next((i for i in items if i.get("name") == bd), None)
+        if group is None or bluray is None:
+            continue
+        m = dict(group, name=f"Bluray|{gn}", allowed=True,
+                 items=list(group.get("items") or []) + [bd])
+        renames[gn] = m["name"]
+        # The merged group takes the better slot: the one Bluray-<res> held when
+        # it was already allowed, otherwise the group keeps its own.
+        if bluray.get("allowed"):
+            items = [m if i.get("name") == bd else i for i in items if i.get("name") != gn]
+        else:
+            items = [m if i.get("name") == gn else i for i in items if i.get("name") != bd]
+    return items, renames
+
+
+def as_qualities(items):
+    """Recyclarr's `qualities:` shape - a group is a name plus nested names."""
+    out = []
+    for i in items:
+        if not i.get("allowed"):
+            continue
+        if i.get("items"):
+            out.append({"name": i["name"], "qualities": list(i["items"])})
+        else:
+            out.append({"name": i["name"]})
+    return out
 
 
 merged = {"base_url": os.environ["RECYCLARR_URL"], "api_key": os.environ["RECYCLARR_KEY"]}
@@ -68,6 +126,38 @@ for name in names:
         # Our own formats are not in the guide, so an unmatched-score reset
         # would clear them out of every profile on each sync.
         profile["reset_unmatched_scores"] = {"enabled": False}
+        guide = guide_profiles.get(profile.get("trash_id"))
+        if guide:
+            items, renames = fold_bluray_into_web(guide["items"])
+            profile["qualities"] = as_qualities(items)
+            # The cutoff has to name something in that list, and there are two
+            # ways it can stop doing so. It is a quality that got folded *into* a
+            # group (Radarr cuts off at Bluray-1080p), or it is the group's own
+            # name, which the fold renamed (Sonarr cuts off at "WEB 1080p", now
+            # "Bluray|WEB 1080p"). Missing the second meant Recyclarr rejected the
+            # whole sonarr.yml - silently, reporting only "Found 1 config files"
+            # and syncing Radarr alone.
+            cutoff = renames.get(guide["cutoff"], guide["cutoff"])
+            for i in items:
+                if cutoff in (i.get("items") or []):
+                    cutoff = i["name"]
+                    break
+            profile["upgrade"] = {
+                "allowed": guide.get("upgradeAllowed", True),
+                "until_quality": cutoff,
+                "until_score": guide["cutoffFormatScore"],
+            }
+            profile["min_format_score"] = guide["minFormatScore"]
+            # min_upgrade_format_score is deliberately NOT set: the guide's own
+            # value stands, so a release that scores better than the file on disk
+            # replaces it. That is wanted here - the library is meant to converge
+            # on the rules rather than keep whatever arrived first - and the
+            # one-at-a-time pacing is scripts/audio-regrab.sh's job, not a score's.
+            names = {q["name"] for q in profile["qualities"]}
+            if cutoff not in names:
+                raise SystemExit(
+                    f'{app}: cutoff {cutoff!r} is not among the qualities '
+                    f'{sorted(names)} - Recyclarr would discard this file silently')
         profiles.append(profile)
     formats = section.get("custom_format_groups") or {}
     for group in formats.get("add") or []:

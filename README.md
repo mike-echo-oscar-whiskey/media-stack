@@ -680,6 +680,119 @@ second track existing. Verified: 0 of 40 live `.DUTCH.` releases are rejected by
 What this does **not** do is fix a file already on disk. The guard stops new ones arriving;
 re-ordering the tracks of a file that is already in the library is a separate, manual job.
 
+#### Audio the televisions can decode
+
+A Samsung Tizen set cannot decode DTS or TrueHD. When the track Plex wants is one of those it
+transcodes the audio while passing the video through — the same `video=copy audio=transcode` path
+as the section above, and the same eventual freeze. `Encanto` arrived that way, ran **64 minutes**
+and died. So the profile prefers what the equipment can actually play.
+
+**Measured on this library's own files**, by the codec of each film's first audio track, as Jellyfin
+probed them on import:
+
+| Codec | Tracks | Median channels | Max | Notes |
+|---|---:|---:|---:|---|
+| **EAC3 (DD+)** | **186** | **5.1** | **7.1** | 44 of the 48 Atmos tracks here |
+| AC3 (DD) | 78 | 5.1 | 5.1 | |
+| DTS | 41 | 5.1 | 7.1 | **needs a transcode** |
+| AAC | 37 | **2.0** | 5.1 | 24 of 37 are stereo |
+| TrueHD | 5 | 7.1 | 7.1 | **needs a transcode** |
+
+DD+ is the sweet spot rather than a compromise: it is the streaming standard, it carries 7.1, and
+**DD+ Atmos is the one Atmos route a Samsung app passes over eARC to a Sonos Beam**. DTS-HD MA and
+TrueHD are lossless and on paper better — but the set decodes neither, so Plex re-encodes them, and
+in the Encanto test that came out as AAC. The preference trades a lossless track that never plays
+losslessly for a 7.1 Atmos one that does.
+
+| Scored in `HD Bluray + WEB` | |
+|---|---:|
+| `DD+ ATMOS` | +320 |
+| `DD+` | +280 |
+| `DD` | +200 |
+| `AAC` | +60 |
+| `DTS`, `DTS-ES`, `DTS-HD HRA`, `DTS-HD MA`, `DTS X`, `TrueHD`, `TrueHD ATMOS`, `FLAC`, `PCM` | **0, unchanged** |
+| `WEB-DL Source` | +150 |
+
+Five things about those numbers are deliberate.
+
+**Positive scores only, never penalties.** `minFormatScore` is 0, so a penalty would *reject* a film
+offered only with DTS. One transcode beats no film.
+
+**AAC is barely scored** because 24 of its 37 tracks here are stereo — worth having over a
+transcode, not worth losing 5.1 for.
+
+**The source score exists because the codec formats are half-blind.** Every audio custom format is a
+`ReleaseTitleSpecification`: it reads the release *name*, not the file. Measured against these 196
+films, when a title names a codec it is right 94% of the time — but **36% of titles name none at
+all**, and 17 of those 72 silent films turned out to be DTS or TrueHD, `Encanto` among them. No
+regex fixes that; the information is absent. Source is the field that is always present and it
+correlates: **35 of 98 Bluray files here carry DTS or TrueHD against 0 of 98 WEB files.**
+
+**150 is measured against the guides' release-group tiers**, which run 1600–1800 and put HD Bluray
+100 above WEB at the same rank. 150 clears that, so a WEB-DL beats a Bluray of equal tier while a
+top-tier Bluray still beats a bottom-tier WEB-DL. `WEBRIP` is excluded: it is a re-encode of a
+stream, 2.2 Mbit/s median here against WEB-DL's 6.8, and promoting it would buy safe audio with a
+bad picture.
+
+**This is a bitrate-for-reliability trade, taken knowingly.** Bluray-1080p carries 10.1 Mbit/s
+median video here against WEB-DL's 6.8. The whole point is that the louder picture is the one whose
+audio stops playing.
+
+##### Why Bluray and WEB share one quality group
+
+In Radarr **quality rank is compared before custom-format score**, so while `Bluray-1080p` is a
+separate, higher rank than the `WEB 1080p` group no score can ever prefer a WEB release.
+`lib/recyclarr-config.py` therefore folds `Bluray-<res>` into the `WEB <res>` group beside it — as
+TRaSH's own `[French MULTi.VO]` profiles do — so the two rank equally and the scores decide.
+
+It also fixes the cutoff. Un-folded, the guide's cutoff is `Bluray-1080p`, which puts **every WEB
+file below cutoff**: 98 films here, every one an upgrade candidate. Folded, the cutoff is the group
+and both sources satisfy it.
+
+##### Radarr only
+
+Sonarr holds none of the audio formats. Its guide ships them only inside an `audio-formats` group,
+and selecting a group hands Recyclarr the *scores* as well — the guide's fidelity ordering, TrueHD
+ATMOS 5000 above DTS X 4500 above DD+ ATMOS 3000, which is precisely backwards for a television
+that cannot decode either, and which would overwrite ours on every sync. Owning private copies of
+nine formats in Sonarr is a bigger change than the gap justifies: **17 of 319 episodes** here carry
+TrueHD on track 1, against 76% already EAC3, and every series profile is WEB where DTS does not
+appear at all.
+
+The same reasoning keeps these scores out of the `Remux + WEB` and `UHD Bluray + WEB` profiles,
+where the guide's lossless-first ordering is both unwinnable and correct — a profile called *Remux*
+is chosen **for** lossless audio, by someone whose equipment decodes it.
+
+##### Replacing what is already on disk
+
+Scoring only steers new grabs. `scripts/audio-regrab.sh` fixes the library already here, by the two
+faults that break playback — first track in a codec the set cannot decode, or first track in another
+language with English behind it. **61 films** qualify, 575 GiB on disk.
+
+It reads **Jellyfin's probe, not the release name**, because that is the only source that knows the
+truth, and it costs one API call and no media reads — which matters, since most of the library lives
+on the archive branch and probing it directly would pull it back off the cloud.
+
+It searches **one film at a time**, most-watched first by TMDB vote count, holding whenever the
+queue is deep or the disk is under `DISK_WARN_GIB`. A blanket search would grab sixty films at once,
+which is the thing the download caps and the disk brake exist to prevent. The list is recomputed
+every pass, so a fixed film drops out by itself and the run is resumable — stop it, start it again,
+nothing repeats.
+
+```bash
+DRY_RUN=1 ./scripts/audio-regrab.sh     # list what it would do, change nothing
+./scripts/audio-regrab.sh               # then let it work
+```
+
+| Knob | Default | |
+|---|---|---|
+| `REGRAB_MAX_QUEUE` | 2 | hold while the queue is deeper than this |
+| `REGRAB_GAP_SECONDS` | 180 | wait between films |
+| `REGRAB_MAX_TRIES` | 3 | then give up and name the film — nothing here can fix a film nobody released properly |
+| `REGRAB_WANT_LANG` | `eng` | ISO 639-2, as Jellyfin stores it |
+| `REGRAB_BAD_CODECS` | `dts truehd` | lowercase, space separated |
+| `REGRAB_STATE` | `backups/audio-regrab-tries.tsv` | the per-film try count, so a restart does not reset it |
+
 #### The release guard
 
 `scripts/release-guard.sh`, mounted at `/scripts` in Sonarr and Radarr and wired as a *Custom
