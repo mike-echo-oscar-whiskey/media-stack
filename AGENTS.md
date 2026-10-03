@@ -392,15 +392,21 @@ Each of these cost a debugging session, and none can be read off the code.
   acknowledged, and when it bites it plays for a minute or two then stops for good with
   `range could not be satisfied` repeating in the player log.
 
-  **It does not always bite, and the first version of this entry was wrong to say it does.**
-  On 2026-10-03 `Encanto` - DTS-HD MA English on track 1, Dutch AC3 on track 2 - played for
-  over an hour on exactly that path: `video=copy audio=transcode`, `dca -> aac` for an adult
-  and `ac3 -> aac` for a child on the *second* track, at a measured 0.99 of realtime, through
-  four seeks and several chapter jumps, with no freeze. The night before, releases of the same
-  shape froze within minutes and a seek killed one outright. So it is intermittent. The honest
-  rule: prefer a path with no audio transcode, but do not call a file broken because it needs
-  one, and do not call the bug fixed because one file survived. Judge a specific file by
-  playing it, and judge it by whether the position advances. Jellyfin is unaffected because it remuxes a container holding only the wanted
+  **How long it takes to bite is not a minute or two, and the time it survives proves nothing.**
+  On 2026-10-03 `Encanto` - DTS-HD MA English on track 1, Dutch AC3 on track 2 - ran **64
+  minutes** on exactly that path (`video=copy audio=transcode`; `dca -> aac` for an adult and
+  `ac3 -> aac` for a child on the *second* track) at a measured 0.99 of realtime, through four
+  seeks and several chapter jumps, and *then* froze: position stuck at 63.79 min with the client
+  reporting `buffering` and never moving again. The night before, releases of the same shape
+  froze within minutes.
+
+  So the only safe reading is that the path fails eventually and unpredictably. Two traps follow
+  from that. **A clean ten or sixty minutes is not evidence the file is fine** - this is what
+  made an earlier version of this entry claim the bug was fixed, on an hour of good playback that
+  ended in the same freeze. And **the error is not always logged**: the January-2024 signature is
+  `CHUNK_DEMUXER_ERROR_APPEND_FAILED` / `the player cannot recover`, but this freeze produced no
+  entry at all - the server log simply stops, and with `logDebug=0` there is nothing else to find.
+  Judge it by whether the playback position advances, never by the absence of an error. Jellyfin is unaffected because it remuxes a container holding only the wanted
   track and copies both streams - `IsVideoDirect: true, IsAudioDirect: true` at 9 percent CPU
   where Plex re-encodes EAC3 to AAC.
 

@@ -10,7 +10,9 @@ transcodes the audio while passing the video through, and **video-direct-plus-au
 unfixed Plex-for-Samsung defect** — see the Plex entry under *Traps* in `AGENTS.md`, which also
 lists the five causes already disproved so they are not retried.
 
-Observed live on 2026-10-03, playing `Encanto (2021)` on the living-room set:
+Observed live on 2026-10-03, playing `Encanto (2021)` on the living-room set — and it **did
+freeze**, after 64 minutes, position stuck at 63.79 min with the client reporting `buffering` and
+no error written to the server log at all:
 
 ```
 11:23:11  pos 0.35min  playing  Plex for Samsung @192.168.1.200
@@ -56,9 +58,15 @@ release ever does. That is the trade-off hiding behind "Bluray is better": Blura
 | DTS, DTS-ES, DTS-HD HRA, DTS-HD MA, DTS X | **no** | Plex removed its DTS toggle and 2018+ Samsung sets carry no DTS licence; confirmed by the transcode above |
 | TrueHD, TrueHD ATMOS | **no** | same family of unsupported lossless formats |
 
-**Verify before building.** The DTS conclusion rests on the single observation above plus
-research, not on a per-codec playback test. One file per codec played on the actual set would
-settle it, and is cheap.
+**Verify before building.** The DTS conclusion rests on the observation above plus research, not
+on a per-codec playback test. One file per codec played on the actual set would settle it, and is
+cheap.
+
+**And note what the 64 minutes mean.** The same session survived four seeks and several chapter
+jumps before dying, which is why no amount of clean playback can be taken as evidence that a file
+is safe — see the amended Plex entry under *Traps* in `AGENTS.md`. Avoiding the transcode is the
+only thing that removes the risk, which is the whole case for this work: the scoring cannot make a
+transcoded stream reliable, it can only stop one being chosen.
 
 ## The design
 
