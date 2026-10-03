@@ -168,6 +168,57 @@ pick_release() {                  # pick_release MOVIEID
     | "\(.guid)\t\(.indexerId)\t\(.title)"' <<<"$body"
 }
 
+# A manual grab gets past the *search* rejection but not the *import* check: Radarr
+# still refuses "Not a quality revision upgrade for existing movie file(s)", so a
+# replacement for one of the 15 PROPER films downloads in full and then sits in the
+# queue unimported. That is worse than being refused up front, because the bandwidth
+# is already spent. Manual import overrides it - the same override the web UI offers -
+# so anything stuck on exactly that reason is pushed through here.
+#
+# Deliberately narrow. Only the revision message qualifies: "Manual Import required"
+# means Radarr could not work out which movie the file belongs to, and forcing that
+# would file a release under the wrong title.
+force_stuck_imports() {
+  local q ids dl mi body code n=0
+  q=$(rad "queue?pageSize=200") || return 0
+  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$q" || return 0
+  ids=$(jq -r '
+    .records[]?
+    | select((.trackedDownloadState // "") | test("^import(Pending|Blocked)$"))
+    | ([.statusMessages[]?.messages[]?]) as $m
+    | select(($m | length) > 0 and all($m[]; test("quality revision upgrade")))
+    | .downloadId // empty' <<<"$q" | sort -u)
+  [[ -n "$ids" ]] || return 0
+  while IFS= read -r dl; do
+    [[ -n "$dl" ]] || continue
+    mi=$(rad "manualimport?downloadId=$dl&filterExistingFiles=false") || continue
+    jq -e 'type == "array" and length > 0' >/dev/null 2>&1 <<<"$mi" || continue
+    body=$(jq -c '{name:"ManualImport", importMode:"move",
+                   files: [ .[] | select((.movie.id // 0) > 0)
+                            | {path, movieId: .movie.id, quality, languages,
+                               releaseGroup, indexerFlags: (.indexerFlags // 0)} ]}' <<<"$mi")
+    jq -e '.files | length > 0' >/dev/null 2>&1 <<<"$body" || continue
+    code=$(printf '%s' "$body" | curl -fsS -m 120 -o /dev/null -w '%{http_code}' -X POST \
+             -H "X-Api-Key: $KEY" -H 'Content-Type: application/json' --data-binary @- \
+             "$RADARR/api/v3/command") || code=000
+    log "  forced the import Radarr refused as not-a-revision-upgrade [$code] ($dl)"
+    n=$(( n + 1 ))
+  done <<<"$ids"
+  (( n )) && sleep 15
+  return 0
+}
+
+# Radarr already downloading a replacement for this film. Must be checked *before*
+# picking: with something in the queue every candidate is refused with "Release in
+# queue is of equal or higher preference", which looks exactly like "nothing
+# decodable is offered" and burned a try per pass on films that were already being
+# fixed. Harry Potter and Up each lost two tries in thirty seconds that way.
+has_download() {                  # has_download MOVIEID
+  local q; q=$(rad "queue?pageSize=200")
+  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$q" || return 0   # cannot tell: assume yes
+  jq -e --argjson m "$1" 'any(.records[]?; .movieId == $m)' >/dev/null <<<"$q"
+}
+
 grab() {                          # grab GUID INDEXERID -> http code
   jq -cn --arg g "$1" --argjson i "$2" '{guid:$g, indexerId:$i}' \
   | curl -fsS -m 120 -o /dev/null -w '%{http_code}' -X POST -H "X-Api-Key: $KEY" \
@@ -204,6 +255,7 @@ while :; do
   n=$(printf '%s' "$list" | grep -c . || true)
   (( n == 0 )) && { log "nothing left to replace - done after $pass passes"; break; }
   log "pass $pass: $n films still have audio the televisions cannot play"
+  force_stuck_imports
 
   acted=0
   while IFS=$'\t' read -r id tmdb why title; do
@@ -214,6 +266,12 @@ while :; do
       continue
     fi
 
+    force_stuck_imports
+    # Already being replaced: leave it alone and do not spend a try on it.
+    if has_download "$id"; then
+      log "already downloading a replacement for $title - skipping"
+      continue
+    fi
     pick=$(pick_release "$id") || pick=''
     if [[ -z "$pick" ]]; then
       bump_tries "$tmdb"
