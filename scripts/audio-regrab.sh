@@ -74,6 +74,17 @@ MAX_INFLIGHT=${REGRAB_MAX_INFLIGHT:-${TORRENT_MAX_ACTIVE_DOWNLOADS:-3}}
 POLL=${REGRAB_POLL_SECONDS:-60}
 WANT_LANG=${REGRAB_WANT_LANG:-eng}
 BAD_CODECS=${REGRAB_BAD_CODECS:-"dts truehd"}
+# A language that must never be lost. A film carrying it is left alone, however bad
+# its first track is, because a replacement chosen for decodable English audio is
+# almost always English-only - so fixing Plex for the adults would delete the dub the
+# children actually watch. Four films here are in that position: Despicable Me 3,
+# Hoppers and the two Ice Ages all carry Dutch behind a DTS or foreign first track.
+#
+# They are not broken for the children: Jellyfin remuxes a single-track container and
+# plays Dutch at nine percent CPU whatever the codec. Only Plex struggles, and Plex is
+# not where those films get watched. Leaving them is the smaller loss by a wide margin.
+# Empty turns the protection off.
+PROTECT_LANG=${REGRAB_PROTECT_LANG:-nld}
 # Radarr's names for audio the televisions decode, and the ones they cannot. A
 # candidate must name one of the first and none of the second: a release that names
 # no codec at all is skipped, because unknown is exactly what got us here.
@@ -118,7 +129,8 @@ eligible() {                      # eligible JELLYFIN_TOKEN
   jq -e 'type == "object" and (.Items | type == "array")' >/dev/null 2>&1 < "$jf" \
     || { rm -rf "$tmp"; return 1; }
   jq -e 'type == "array"' >/dev/null 2>&1 < "$rad_f" || { rm -rf "$tmp"; return 1; }
-  jq -r --slurpfile probe "$jf" --arg want "$WANT_LANG" --arg bad "$BAD_CODECS" '
+  jq -r --slurpfile probe "$jf" --arg want "$WANT_LANG" --arg bad "$BAD_CODECS" \
+        --arg keep "$PROTECT_LANG" '
     ($bad | split(" ") | map(select(length > 0))) as $badlist
     | ( [ $probe[0].Items[]
           | { tmdb: ((.Path // "") | capture("\\{tmdb-(?<i>[0-9]+)\\}").i | tonumber?),
@@ -127,13 +139,20 @@ eligible() {                      # eligible JELLYFIN_TOKEN
           | { tmdb: .tmdb,
               codec: ((.au[0].Codec // "") | ascii_downcase),
               lang:  (.au[0].Language // "und"),
-              haswant: ([ .au[] | select((.Language // "") == $want) ] | length > 0) } ]
+              haswant: ([ .au[] | select((.Language // "") == $want) ] | length > 0),
+              # dut is the other spelling Jellyfin stores for Dutch, and both appear
+              # in this library, so a check on one alone would miss half of them.
+              haskeep: ($keep != "" and ([ .au[]
+                         | select((.Language // "") == $keep
+                                  or ((.Language // "") == "dut" and $keep == "nld")) ] | length > 0)) } ]
         | INDEX(.tmdb | tostring) ) as $pr
     | [ .[]
         | select(.hasFile)
         | . as $m
         | ($pr[$m.tmdbId | tostring]) as $p
         | select($p != null)
+        # Carries the language that must not be lost: leave it entirely alone.
+        | select($p.haskeep | not)
         | ( if ($badlist | index($p.codec)) then "codec:" + $p.codec
             elif ($p.lang != $want and $p.haswant) then "first-track:" + $p.lang
             else null end ) as $why
@@ -244,7 +263,7 @@ token=$(curl -fsS -m 30 -X POST -H 'Content-Type: application/json' \
   "$JELLYFIN/Users/AuthenticateByName" 2>/dev/null | jq -r '.AccessToken // empty')
 [[ -n "$token" ]] || { echo "could not authenticate to Jellyfin (WEBUI_USERNAME/WEBUI_PASSWORD)"; exit 1; }
 
-log "audio-regrab starting: want $WANT_LANG first, refusing [$BAD_CODECS]"
+log "audio-regrab starting: want $WANT_LANG first, refusing [$BAD_CODECS]${PROTECT_LANG:+, never touching a film that carries $PROTECT_LANG}"
 log "  up to $MAX_INFLIGHT in flight, warn mark $WARN GiB, cloud pushed on every film; at most $MAX_TRIES tries per film"
 (( DRY_RUN )) && log "  DRY_RUN=1 - choosing and reporting only, nothing is grabbed"
 
